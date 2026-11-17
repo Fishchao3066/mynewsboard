@@ -219,7 +219,7 @@ textarea{resize:vertical;min-height:74px;line-height:1.55}
 .zcol:hover .zchd .go{opacity:1}
 .zchd .go:hover{color:var(--c);border-color:var(--c)}
 /* 栏体：常显不折叠；内部按必读/该看/扫一眼三段 */
-.zbody{padding:9px 10px 11px;display:flex;flex-direction:column;gap:9px;overflow-y:auto;max-height:66vh}
+.zbody{padding:9px 10px 11px;display:flex;flex-direction:column;gap:9px}
 .zsec{border:1px solid var(--line);border-radius:10px;overflow:hidden;background:var(--bg2)}
 .zsec>.sh{
   display:flex;align-items:center;gap:6px;padding:6px 9px;font-size:10.5px;font-weight:700;
@@ -353,7 +353,7 @@ textarea{resize:vertical;min-height:74px;line-height:1.55}
 <nav id="tabs"></nav>
 
 <header>
-  <div class="logo"><span class="dot"></span>我的信息台<small id="chTip">分区</small><small style="color:var(--hi);font-size:10px" title="构建版本">v3.6</small></div>
+  <div class="logo"><span class="dot"></span>我的信息台<small id="chTip">分区</small><small style="color:var(--hi);font-size:10px" title="构建版本">v3.7</small></div>
   <div class="sp"></div>
   <button class="btn" id="bDemo">载入演示</button>
   <button class="btn pri" id="bPull">拉取更新</button>
@@ -874,6 +874,12 @@ async function judge(batch, focus, cfg){
   }finally{ clearTimeout(tm); }
 }
 const lvOf = sc => sc>=8 ? 'hi' : (sc>=5 ? 'mid' : 'low');
+// 统一分档：优先用 lv 字段，但若它非法则用 score 兜底，保证「计数」和「卡片」永远一致
+const lvOfItem = it => {
+  const k = it && it.lv;
+  if(k==='hi'||k==='mid'||k==='low') return k;
+  return lvOf(Number(it&&it.score)||0);
+};
 
 /* ══════════ 演示数据 ══════════ */
 const DEMO_CH = [
@@ -913,7 +919,7 @@ $('#bPull').onclick = async () => {
   if(!cfg.key) return sheet('还没填 API Key', '不填 Key 只能看演示数据。到「设置」里贴一个 MiMo 或 DeepSeek 的 Key，存在你自己浏览器里。', ()=>{ $('#cfg').classList.add('show'); fillCfg(); }, '去填');
 
   busy = true; $('#bPull').disabled = true; $('#log').classList.add('show');
-  log(`构建 v3.6 · 当前代理：${(Array.isArray(cfg.proxy)?cfg.proxy:[cfg.proxy]).join(' | ')}`);
+  log(`构建 v3.7 · 当前代理：${(Array.isArray(cfg.proxy)?cfg.proxy:[cfg.proxy]).join(' | ')}`);
   let added = 0;
   try{
     for(const c of chs){
@@ -982,7 +988,7 @@ $('#bPull').onclick = async () => {
 function tabbar(){
   const chs = S.cfg.ch;
   const tot = S.items.length;
-  const hiN = S.items.filter(x=>x.lv==='hi').length;
+  const hiN = S.items.filter(x=>lvOfItem(x)==='hi').length;
   const html = [
     {id:'__all', name:'信息台总看板', color:'var(--acc)', n:tot, extra:hiN?hiN+' 必读':''}
   ].concat(chs.map(c => ({
@@ -1053,7 +1059,8 @@ function srcCN(s){
   return s;
 }
 function card(it){
-  const cls = it.lv==='hi' ? 's-hi' : (it.lv==='mid' ? 's-mid' : 's-low');
+  const _lv = lvOfItem(it);
+  const cls = _lv==='hi' ? 's-hi' : (_lv==='mid' ? 's-mid' : 's-low');
   const body = (it.summary || it.text || '')
     + (it.why && !it.why.startsWith('AI 不可用') ? '@@'+it.why : '');
   const [sum, why] = body.split('@@');
@@ -1087,7 +1094,7 @@ function scope(){
 }
 function updateStats(){
   const sc = scope();
-  const by = (arr,k) => isAll() ? arr.filter(x=>x.lv===k) : arr.filter(x=>x.lv===k);
+  const by = (arr,k) => arr.filter(x=>lvOfItem(x)===k);
   const set=(id,v)=>{const e=document.getElementById(id); if(e) e.textContent=v;};
   set('n1', by(sc.hi,'hi').length);
   set('n2', by(sc.mid,'mid').length);
@@ -1102,6 +1109,10 @@ function updateStats(){
 
 function render(){
   const chs = S.cfg.ch;
+  // 自愈：修正任何 lv 与 score 不一致的条目，保证分栏计数与卡片严格对应
+  let fixed = false;
+  S.items.forEach(x=>{ const k=lvOfItem(x); if(x.lv!==k){ x.lv=k; fixed=true; } });
+  if(fixed) save();
   tabbar();
   $('#chTip').textContent = isAll() ? ('总看板 · '+chs.length+' 个分区') : (chOf(view).name||'分区');
   if(!chs.some(c=>c.id===view) && !isAll()) view = '__all';
@@ -1128,7 +1139,7 @@ function render(){
       + '<span class="sp"></span>'
       + '<button class="go" data-goto="__all">← 回总看板</button></div>'
       + '<div class="subgrid">' + LV.map(lv => {
-          const a = mine.filter(x => x.lv===lv.k);
+          const a = mine.filter(x => lvOfItem(x)===lv.k);
           return `<section class="sub" style="--c:${lv.color}" data-lv="${lv.k}"><div class="sh">
             <span class="tag"></span>${lv.name}<span class="n">${a.length}</span></div>
             <div class="list">${a.length ? a.map(card).join('') : '<div class="zempty">这一档现在是空的</div>'}</div></section>`;
@@ -1141,7 +1152,7 @@ function render(){
   const groups = S.cfg.ch.map(c => ({c, a: S.items.filter(x=>x.ch===c.id)}));
   const other = S.items.filter(x => !S.cfg.ch.some(c=>c.id===x.ch));
   $('#board').innerHTML = groups.map(g => {
-      const n = {}; g.a.forEach(x=>n[x.lv]=(n[x.lv]||0)+1);
+      const n = {}; g.a.forEach(x=>{const k=lvOfItem(x); n[k]=(n[k]||0)+1;});
       const sorted = g.a.slice().sort((x,y)=>(y.score||0)-(x.score||0));
       return `<section class="zcol ${g.c.on?'':'off'}" style="--c:${esc(g.c.color||'#5b8cff')}">
         <div class="zchd"><span class="cdot"></span><span class="cn">${esc(g.c.name||'分区')}</span>
@@ -1149,14 +1160,14 @@ function render(){
           <button class="go" data-goto="${esc(g.c.id)}">进入 →</button></div>
         <div class="zbody">${
           g.a.length
-            ? LV.map(lv => subCol(g.c, lv, sorted.filter(x=>x.lv===lv.k), g.c.id, true)).join('')
+            ? LV.map(lv => subCol(g.c, lv, sorted.filter(x=>lvOfItem(x)===lv.k), g.c.id, true)).join('')
             : '<div class="zempty">这个分区还没有内容</div>'
         }</div></section>`;
     }).join('')
     + (other.length ? `<section class="zcol" style="--c:#8a8f98">
         <div class="zchd"><span class="cdot"></span><span class="cn">未分组</span>
           <span class="cnt">${other.length} 条</span></div>
-        <div class="zbody">${LV.map(lv => subCol({id:''}, lv, other.filter(x=>x.lv===lv.k), '', true)).join('')}</div></section>` : '');
+        <div class="zbody">${LV.map(lv => subCol({id:''}, lv, other.filter(x=>lvOfItem(x)===lv.k), '', true)).join('')}</div></section>` : '');
   bind(); updateStats();
 }
 
