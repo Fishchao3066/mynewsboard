@@ -353,7 +353,7 @@ textarea{resize:vertical;min-height:74px;line-height:1.55}
 <nav id="tabs"></nav>
 
 <header>
-  <div class="logo"><span class="dot"></span>我的信息台<small id="chTip">分区</small><small style="color:var(--hi);font-size:10px" title="构建版本">v3.5</small></div>
+  <div class="logo"><span class="dot"></span>我的信息台<small id="chTip">分区</small><small style="color:var(--hi);font-size:10px" title="构建版本">v3.6</small></div>
   <div class="sp"></div>
   <button class="btn" id="bDemo">载入演示</button>
   <button class="btn pri" id="bPull">拉取更新</button>
@@ -395,8 +395,9 @@ textarea{resize:vertical;min-height:74px;line-height:1.55}
   </div>
   <div class="fld">
     <label>CORS 代理（直连失败时兜底，一行一个，自动依次尝试）</label>
-    <textarea id="cProxy" style="min-height:74px" placeholder="https://api.allorigins.win/raw?url={url}">https://api.allorigins.win/raw?url={url}</textarea>
-    <div class="hint">allorigins 是实测线上可用的免费代理（慢源约 25 秒，已放宽超时）。corsproxy.io 需 Key、corsfix 限域名、r.jina.ai 返回 Markdown，线上都不可用。支持 {url} 占位符；一行一个按顺序回退。</div>
+    <textarea id="cProxy" style="min-height:74px" placeholder="https://api.allorigins.win/raw?url={url}">https://api.allorigins.win/raw?url={url}
+https://api.rss2json.com/v1/api.json?rss_url={url}</textarea>
+    <div class="hint">公共代理不稳定，已内置「每个代理自动重试 2 次」。allorigins 返回 XML、rss2json 返回 JSON（自动转换）。一行一个按顺序回退，{url} 是占位符。想 100% 稳定可自建 Cloudflare Worker 代理（仓库里有 worker.js）。</div>
   </div>
   <div class="fld full">
     <div class="row2">
@@ -465,14 +466,14 @@ const uid = () => 'c' + Math.random().toString(36).slice(2,8);
 const CFG_DEF = () => ({
   focus: '', key: '', base: 'https://api.xiaomimimo.com/v1',
   model: 'mimo-v2.6-flash',
-  proxy: 'https://api.allorigins.win/raw?url={url}',
+  proxy: 'https://api.allorigins.win/raw?url={url}\nhttps://api.rss2json.com/v1/api.json?rss_url={url}',
   ch: [{id:'ch_def', name:'默认分区', color:'#5b8cff', focus:'', feeds:[], on:true}]
 });
 const LOGS = [];
 const isAll = () => view === '__all';
 function normProxy(p){
   let a = Array.isArray(p) ? p : (typeof p==='string' ? p.split('\n').map(s=>s.trim()).filter(Boolean) : []);
-  const GOOD = ['https://api.allorigins.win/raw?url={url}'];
+  const GOOD = ['https://api.allorigins.win/raw?url={url}', 'https://api.rss2json.com/v1/api.json?rss_url={url}'];
   // 实测失效的公共代理：corsproxy.io 401、corsfix 403、r.jina.ai 返回 Markdown，自动剔除
   a = a.filter(x => !/corsproxy\.io|corsfix\.com|r\.jina\.ai/i.test(x) || /key=/i.test(x));
   a = a.concat(GOOD);
@@ -653,31 +654,39 @@ $('#bTranslate').onclick = async () => {
   if(!targets.length) return toast('没有需要翻译的条目，都是中文');
   if(!confirm('发现 '+targets.length+' 条外文内容，调用大模型翻译成中文？会产生少量 API 费用。')) return;
   const btn = $('#bTranslate'); btn.disabled = true; btn.textContent = '翻译中…';
-  let done = 0;
+  let done = 0, failed = 0;
   try{
-    for(let i=0;i<targets.length;i+=10){
-      const batch = targets.slice(i,i+10);
-      const payload = batch.map((x,j)=>`${j}. 标题：${x.title}\n   摘要：${x.summary||''}`).join('\n');
+    // 每批 5 条，用「制表符分隔的纯文本」代替 JSON，彻底避开引号/大括号转义导致的解析失败
+    for(let i=0;i<targets.length;i+=5){
+      const batch = targets.slice(i,i+5);
+      const payload = batch.map((x,j)=>`${j}\t${x.title}\t${x.summary||''}`).join('\n');
       try{
         const r = await fetch(S.cfg.base.replace(/\/$/,'')+'/chat/completions', {
           method:'POST', headers:{'Content-Type':'application/json','Authorization':'Bearer '+S.cfg.key},
           body: JSON.stringify({model:S.cfg.model, temperature:0.2, max_tokens:1500, messages:[
-            {role:'system',content:'把下面的新闻标题和摘要翻译成简体中文，保留专有名词通用译法。只输出 JSON 数组，不要解释，格式：[{"i":0,"title":"中文标题","summary":"中文摘要"}]'},
+            {role:'system',content:'把下面的新闻标题和摘要翻译成简体中文，保留专有名词通用译法。严格逐行输出，每行用制表符分隔三列：序号<TAB>中文标题<TAB>中文摘要。不要输出 JSON、不要 markdown、不要解释、不要空行。'},
             {role:'user',content:payload}]})
         });
+        if(!r.ok) throw new Error('HTTP '+r.status);
         const j = await r.json();
-        const txt = String(j.choices?.[0]?.message?.content||'').trim();
-        const s = txt.indexOf('['), e = txt.lastIndexOf(']');
-        if(s<0||e<=s) throw new Error('没返回数组');
-        JSON.parse(txt.slice(s,e+1)).forEach(o=>{
-          const it = batch[Number(o.i)]; if(!it) return;
-          if(o.title) it.title_zh = String(o.title).slice(0,120);
-          if(o.summary) it.summary = String(o.summary).slice(0,60);
-          done++;
+        let txt = String(j.choices?.[0]?.message?.content||'').trim();
+        txt = txt.replace(/^```(?:text|json)?/i,'').replace(/```$/,'');
+        let ok = 0;
+        txt.split('\n').forEach(line=>{
+          const p = line.split('\t');
+          if(p.length<2) return;
+          const idx = Number(p[0]);
+          const it = batch[idx];
+          if(!it) return;
+          if(p[1] && p[1].trim()) it.title_zh = p[1].trim().slice(0,120);
+          if(p[2] && p[2].trim()) it.summary = p[2].trim().slice(0,60);
+          ok++; done++;
         });
-      }catch(err){ log('翻译第 '+(i/10+1)+' 批失败：'+err.message); }
+        if(!ok) throw new Error('没有解析出任何行（原文前80字：'+txt.slice(0,80)+'）');
+        log(`翻译第 ${i/5+1} 批：成功 ${ok}/${batch.length} 条`);
+      }catch(err){ failed++; log('翻译第 '+(i/5+1)+' 批失败：'+err.message); }
     }
-    save(); render(); toast('已翻译 '+done+' 条');
+    save(); render(); toast('已翻译 '+done+' 条'+(failed?'，'+failed+' 批失败':''));
   }finally{ btn.disabled=false; btn.textContent='翻译已有条目'; }
 };
 
@@ -740,36 +749,51 @@ function proxyURL(tpl, url){
   const enc = encodeURIComponent(url);
   return tpl.includes('{url}') ? tpl.replace('{url}', enc) : tpl + enc;
 }
-async function getXML(url, proxies){
+function rss2jsonToXML(txt){
   try{
-    // 直连给短超时（8s），快速失败后走代理，避免每个源先干等 15s
-    const ac = new AbortController(), tm = setTimeout(()=>ac.abort(), 8000);
-    try{
-      const r = await fetch(url, {headers:{'Accept':'application/rss+xml, application/atom+xml, application/xml'}, signal:ac.signal});
-      if(r.ok) return await r.text();
-      throw new Error('HTTP '+r.status);
-    }finally{ clearTimeout(tm); }
-  }catch(e){
-    const list = Array.isArray(proxies) ? proxies : (proxies ? [proxies] : []);
-    if(!list.length) throw e;
-    const errs = [];
-    for(const p of list){
+    const o = JSON.parse(txt);
+    if(o.status!=='ok' || !Array.isArray(o.items)) return '';
+    const esc = s => String(s||'').replace(/[<>&]/g,c=>({'<':'&lt;','>':'&gt;','&':'&amp;'}[c]));
+    const items = o.items.map(it=>`<item><title>${esc(it.title)}</title><link>${esc(it.link)}</link><guid>${esc(it.guid||it.link)}</guid><description>${esc(it.description||it.content||'')}</description></item>`).join('');
+    return `<?xml version="1.0" encoding="UTF-8"?><rss version="2.0"><channel><title>${esc(o.feed&&o.feed.title||'feed')}</title>${items}</channel></rss>`;
+  }catch(e){ return ''; }
+}
+function looksLikeFeed(txt){
+  if(/<parsererror|corsproxy_error|invalid_origin|error_code|corsfix_error/i.test(txt.slice(0,400))) return false;
+  if(/<rss|<feed|<rdf/i.test(txt.slice(0,1500))) return true;
+  return !!rss2jsonToXML(txt);
+}
+function normalizeFeed(txt){
+  return /^\s*\{/.test(txt) ? (rss2jsonToXML(txt) || txt) : txt;
+}
+async function fetchOnce(pu, ms){
+  const ac = new AbortController(), tm = setTimeout(()=>ac.abort(), ms);
+  try{
+    const r = await fetch(pu, {signal:ac.signal});
+    if(!r.ok) throw new Error('HTTP '+r.status+(r.status===401?'（代理需 Key）':''));
+    const txt = await r.text();
+    if(!looksLikeFeed(txt)) throw new Error('非 RSS 内容');
+    return normalizeFeed(txt);
+  }finally{ clearTimeout(tm); }
+}
+async function getXML(url, proxies){
+  // 直连：8 秒快速失败
+  try{ return await fetchOnce(url, 8000); }catch(e){}
+  const list = Array.isArray(proxies) ? proxies : (proxies ? [proxies] : []);
+  if(!list.length) throw new Error('直连失败且未配置代理');
+  const errs = [];
+  // 每个代理重试 2 次——公共代理时好时坏，重试能显著提高成功率
+  for(const p of list){
+    for(let attempt=1; attempt<=2; attempt++){
       try{
-        // allorigins 实测慢源要 25 秒，代理超时放宽到 50 秒
-        const pu = proxyURL(p, url);
-        const ac2 = new AbortController(), tm2 = setTimeout(()=>ac2.abort(), 50000);
-        let r;
-        try{ r = await fetch(pu, {signal:ac2.signal}); }
-        finally{ clearTimeout(tm2); }
-        if(!r.ok) throw new Error(String(r.status) + (r.status===401 ? '（代理要求 API Key，请换免费代理或申请 Key）' : ''));
-        const txt = await r.text();
-        if(/<parsererror|corsproxy_error|invalid_origin|error_code/i.test(txt.slice(0,400))) throw new Error('代理返回错误页');
-        if(!/<rss|<feed|<rdf/i.test(txt.slice(0,1500))) throw new Error('代理未返回 XML');
-        return txt;
-      }catch(err){ errs.push(new URL(p).hostname + ':' + err.message); }
+        return await fetchOnce(proxyURL(p, url), 40000);
+      }catch(err){
+        errs.push(new URL(p).hostname+'#'+attempt+':'+err.message);
+        if(attempt<2) await new Promise(r=>setTimeout(r, 800)); // 短暂退避后重试
+      }
     }
-    throw new Error('直连与代理均失败：' + errs.slice(0,3).join('；'));
   }
+  throw new Error('直连与代理均失败：'+errs.slice(0,4).join('；'));
 }
 function pick(t, tags){
   for(const tag of tags){
@@ -889,7 +913,7 @@ $('#bPull').onclick = async () => {
   if(!cfg.key) return sheet('还没填 API Key', '不填 Key 只能看演示数据。到「设置」里贴一个 MiMo 或 DeepSeek 的 Key，存在你自己浏览器里。', ()=>{ $('#cfg').classList.add('show'); fillCfg(); }, '去填');
 
   busy = true; $('#bPull').disabled = true; $('#log').classList.add('show');
-  log(`构建 v3.5 · 当前代理：${(Array.isArray(cfg.proxy)?cfg.proxy:[cfg.proxy]).join(' | ')}`);
+  log(`构建 v3.6 · 当前代理：${(Array.isArray(cfg.proxy)?cfg.proxy:[cfg.proxy]).join(' | ')}`);
   let added = 0;
   try{
     for(const c of chs){
