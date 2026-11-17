@@ -353,7 +353,7 @@ textarea{resize:vertical;min-height:74px;line-height:1.55}
 <nav id="tabs"></nav>
 
 <header>
-  <div class="logo"><span class="dot"></span>我的信息台<small id="chTip">分区</small><small style="color:var(--hi);font-size:10px" title="构建版本">v3.4</small></div>
+  <div class="logo"><span class="dot"></span>我的信息台<small id="chTip">分区</small><small style="color:var(--hi);font-size:10px" title="构建版本">v3.5</small></div>
   <div class="sp"></div>
   <button class="btn" id="bDemo">载入演示</button>
   <button class="btn pri" id="bPull">拉取更新</button>
@@ -395,9 +395,8 @@ textarea{resize:vertical;min-height:74px;line-height:1.55}
   </div>
   <div class="fld">
     <label>CORS 代理（直连失败时兜底，一行一个，自动依次尝试）</label>
-    <textarea id="cProxy" style="min-height:74px" placeholder="https://api.allorigins.win/raw?url={url}">https://api.allorigins.win/raw?url={url}
-https://r.jina.ai/{url}</textarea>
-    <div class="hint">第一行 allorigins 是实测线上可用的免费代理；r.jina.ai 作为备选（返回 Markdown，可能解析不出标题）。corsproxy.io 需 API Key、corsfix 限制域名，线上都会失败。支持 {url} 占位符；一行一个按顺序回退。</div>
+    <textarea id="cProxy" style="min-height:74px" placeholder="https://api.allorigins.win/raw?url={url}">https://api.allorigins.win/raw?url={url}</textarea>
+    <div class="hint">allorigins 是实测线上可用的免费代理（慢源约 25 秒，已放宽超时）。corsproxy.io 需 Key、corsfix 限域名、r.jina.ai 返回 Markdown，线上都不可用。支持 {url} 占位符；一行一个按顺序回退。</div>
   </div>
   <div class="fld full">
     <div class="row2">
@@ -406,6 +405,7 @@ https://r.jina.ai/{url}</textarea>
       <button class="btn" id="bImport">导入配置</button>
       <button class="btn" id="bClear">清空已读记录</button>
       <button class="btn" id="bFixProxy" title="把代理一键换成线上可用的地址">一键修复代理</button>
+      <button class="btn" id="bTranslate" title="把已入库的外文标题和摘要翻成中文">翻译已有条目</button>
       <input type="file" id="fFile" accept=".json" style="display:none">
     </div>
     <div class="hint">换电脑或换浏览器时用导出/导入搬家；Key 也会一起导出，注意别把文件发到群里。</div>
@@ -465,16 +465,16 @@ const uid = () => 'c' + Math.random().toString(36).slice(2,8);
 const CFG_DEF = () => ({
   focus: '', key: '', base: 'https://api.xiaomimimo.com/v1',
   model: 'mimo-v2.6-flash',
-  proxy: 'https://api.allorigins.win/raw?url={url}\nhttps://r.jina.ai/{url}',
+  proxy: 'https://api.allorigins.win/raw?url={url}',
   ch: [{id:'ch_def', name:'默认分区', color:'#5b8cff', focus:'', feeds:[], on:true}]
 });
 const LOGS = [];
 const isAll = () => view === '__all';
 function normProxy(p){
   let a = Array.isArray(p) ? p : (typeof p==='string' ? p.split('\n').map(s=>s.trim()).filter(Boolean) : []);
-  const GOOD = ['https://api.allorigins.win/raw?url={url}', 'https://r.jina.ai/{url}'];
-  // 实测失效的公共代理：corsproxy.io 401、corsfix 403（域名限制），自动剔除并换可用代理
-  a = a.filter(x => !/corsproxy\.io|corsfix\.com/i.test(x) || /key=/i.test(x));
+  const GOOD = ['https://api.allorigins.win/raw?url={url}'];
+  // 实测失效的公共代理：corsproxy.io 401、corsfix 403、r.jina.ai 返回 Markdown，自动剔除
+  a = a.filter(x => !/corsproxy\.io|corsfix\.com|r\.jina\.ai/i.test(x) || /key=/i.test(x));
   a = a.concat(GOOD);
   return [...new Set(a)];
 }
@@ -638,7 +638,47 @@ $('#bClear').onclick = () => {
 $('#bFixProxy').onclick = () => {
   S.cfg.proxy = normProxy([]);
   S.bad = {};
-  save(); fillCfg(); toast('代理已修复为：allorigins + r.jina.ai。现在点「拉取更新」重试');
+  save(); fillCfg(); toast('代理已修复为 allorigins，失败计数已清零。现在点「拉取更新」重试');
+};
+function needTranslate(t){
+  if(!t) return false;
+  // 含较多英文字母且中文很少 → 判断为外文
+  const zh = (t.match(/[\u4e00-\u9fa5]/g)||[]).length;
+  const en = (t.match(/[A-Za-z]/g)||[]).length;
+  return en > 12 && zh < en/2;
+}
+$('#bTranslate').onclick = async () => {
+  if(!S.cfg.key) return sheet('还没填 API Key', '翻译存量条目也要调用大模型，请先到设置里填 Key。', ()=>{ $('#cfg').classList.add('show'); fillCfg(); }, '去填');
+  const targets = S.items.filter(x => needTranslate(x.title) || needTranslate(x.summary));
+  if(!targets.length) return toast('没有需要翻译的条目，都是中文');
+  if(!confirm('发现 '+targets.length+' 条外文内容，调用大模型翻译成中文？会产生少量 API 费用。')) return;
+  const btn = $('#bTranslate'); btn.disabled = true; btn.textContent = '翻译中…';
+  let done = 0;
+  try{
+    for(let i=0;i<targets.length;i+=10){
+      const batch = targets.slice(i,i+10);
+      const payload = batch.map((x,j)=>`${j}. 标题：${x.title}\n   摘要：${x.summary||''}`).join('\n');
+      try{
+        const r = await fetch(S.cfg.base.replace(/\/$/,'')+'/chat/completions', {
+          method:'POST', headers:{'Content-Type':'application/json','Authorization':'Bearer '+S.cfg.key},
+          body: JSON.stringify({model:S.cfg.model, temperature:0.2, max_tokens:1500, messages:[
+            {role:'system',content:'把下面的新闻标题和摘要翻译成简体中文，保留专有名词通用译法。只输出 JSON 数组，不要解释，格式：[{"i":0,"title":"中文标题","summary":"中文摘要"}]'},
+            {role:'user',content:payload}]})
+        });
+        const j = await r.json();
+        const txt = String(j.choices?.[0]?.message?.content||'').trim();
+        const s = txt.indexOf('['), e = txt.lastIndexOf(']');
+        if(s<0||e<=s) throw new Error('没返回数组');
+        JSON.parse(txt.slice(s,e+1)).forEach(o=>{
+          const it = batch[Number(o.i)]; if(!it) return;
+          if(o.title) it.title_zh = String(o.title).slice(0,120);
+          if(o.summary) it.summary = String(o.summary).slice(0,60);
+          done++;
+        });
+      }catch(err){ log('翻译第 '+(i/10+1)+' 批失败：'+err.message); }
+    }
+    save(); render(); toast('已翻译 '+done+' 条');
+  }finally{ btn.disabled=false; btn.textContent='翻译已有条目'; }
 };
 
 /* ══════════ 跳转：统计条 ── 只滚动 + 高亮，绝不隐藏任何卡片 ══════════ */
@@ -702,7 +742,8 @@ function proxyURL(tpl, url){
 }
 async function getXML(url, proxies){
   try{
-    const ac = new AbortController(), tm = setTimeout(()=>ac.abort(), 15000);
+    // 直连给短超时（8s），快速失败后走代理，避免每个源先干等 15s
+    const ac = new AbortController(), tm = setTimeout(()=>ac.abort(), 8000);
     try{
       const r = await fetch(url, {headers:{'Accept':'application/rss+xml, application/atom+xml, application/xml'}, signal:ac.signal});
       if(r.ok) return await r.text();
@@ -714,8 +755,9 @@ async function getXML(url, proxies){
     const errs = [];
     for(const p of list){
       try{
+        // allorigins 实测慢源要 25 秒，代理超时放宽到 50 秒
         const pu = proxyURL(p, url);
-        const ac2 = new AbortController(), tm2 = setTimeout(()=>ac2.abort(), 15000);
+        const ac2 = new AbortController(), tm2 = setTimeout(()=>ac2.abort(), 50000);
         let r;
         try{ r = await fetch(pu, {signal:ac2.signal}); }
         finally{ clearTimeout(tm2); }
@@ -777,24 +819,35 @@ function parse(xml, src){
 
 /* ══════════ AI 打分 ══════════ */
 async function judge(batch, focus, cfg){
-  const list = batch.map((b,i) => `${i}. 【${b.src}】${b.title}\n   ${b.text.slice(0,700)}`).join('\n');
+  const list = batch.map((b,i) => `${i}. 【${b.src}】${b.title}\n   ${String(b.text||'').slice(0,700)}`).join('\n');
   const sys = `你是个人信息筛选助手。用户关注点：${focus || '（未填写，按通用科技视角判断）'}
 对每条信息打 0-10 分：10=必须马上读，7=值得读，4=有空扫，0=无关。
+【语言要求】所有输出必须是简体中文。如果标题或正文是英文/外文，summary 和 title_zh 都要翻译成中文。
 只输出 JSON 数组，不要 markdown 代码块，不要任何解释。格式：
-[{"i":0,"score":8,"summary":"30字内中文摘要","why":"一句话说清为什么值得他看","category":"标签"}]`;
-  const r = await fetch(cfg.base + '/chat/completions', {
-    method:'POST',
-    headers:{'Content-Type':'application/json','Authorization':'Bearer '+cfg.key},
-    body: JSON.stringify({ model: cfg.model, temperature: 0.2,
-      messages:[{role:'system',content:sys},{role:'user',content:list}] })
-  });
-  if(!r.ok) throw new Error('模型接口 '+r.status+' '+(await r.text()).slice(0,160));
-  const j = await r.json();
-  let txt = (j.choices?.[0]?.message?.content || '').trim();
-  txt = txt.replace(/^```(?:json)?/i,'').replace(/```$/,'');
-  const s = txt.indexOf('['), e = txt.lastIndexOf(']');
-  if(s<0) throw new Error('模型没返回数组');
-  return JSON.parse(txt.slice(s, e+1));
+[{"i":0,"score":8,"title_zh":"把标题翻译成通顺中文（原文已是中文就原样返回）","summary":"30字内中文摘要","why":"一句话说清为什么值得他看","category":"中文标签"}]`;
+  const ac = new AbortController(), tm = setTimeout(()=>ac.abort(), 60000);
+  let raw = '';
+  try{
+    const r = await fetch(cfg.base.replace(/\/$/,'') + '/chat/completions', {
+      method:'POST', signal:ac.signal,
+      headers:{'Content-Type':'application/json','Authorization':'Bearer '+cfg.key},
+      body: JSON.stringify({ model: cfg.model, temperature: 0.2, max_tokens: 2000,
+        messages:[{role:'system',content:sys},{role:'user',content:list}] })
+    });
+    raw = await r.text();
+    if(!r.ok) throw new Error('模型接口 '+r.status+' '+raw.slice(0,160));
+    const j = JSON.parse(raw);
+    let txt = String(j.choices?.[0]?.message?.content || '').trim();
+    // 兼容推理模型：content 为空时尝试 reasoning_content / reasoning
+    if(!txt && j.choices?.[0]?.message){
+      const m = j.choices[0].message;
+      txt = String(m.reasoning_content || m.reasoning || '').trim();
+    }
+    const s = txt.indexOf('['), e = txt.lastIndexOf(']');
+    if(s<0 || e<=s) throw new Error('模型没返回数组（原文前120字：'+txt.slice(0,120)+'）');
+    try{ return JSON.parse(txt.slice(s, e+1)); }
+    catch(err){ throw new Error('模型 JSON 解析失败：'+err.message+'（原文前120字：'+txt.slice(0,120)+'）'); }
+  }finally{ clearTimeout(tm); }
 }
 const lvOf = sc => sc>=8 ? 'hi' : (sc>=5 ? 'mid' : 'low');
 
@@ -836,7 +889,7 @@ $('#bPull').onclick = async () => {
   if(!cfg.key) return sheet('还没填 API Key', '不填 Key 只能看演示数据。到「设置」里贴一个 MiMo 或 DeepSeek 的 Key，存在你自己浏览器里。', ()=>{ $('#cfg').classList.add('show'); fillCfg(); }, '去填');
 
   busy = true; $('#bPull').disabled = true; $('#log').classList.add('show');
-  log(`构建 v3.4 · 当前代理：${(Array.isArray(cfg.proxy)?cfg.proxy:[cfg.proxy]).join(' | ')}`);
+  log(`构建 v3.5 · 当前代理：${(Array.isArray(cfg.proxy)?cfg.proxy:[cfg.proxy]).join(' | ')}`);
   let added = 0;
   try{
     for(const c of chs){
@@ -857,26 +910,39 @@ $('#bPull').onclick = async () => {
       }
       if(!fresh.length){ log(`[${c.name}] 没有新内容`); continue; }
 
-      let kept = fresh;
-      try{
-        const out = [];
-        for(let i=0;i<kept.length;i+=10){
-          const r = await judge(kept.slice(i,i+10), focus, cfg);
+      const out = [];
+      for(let i=0; i<fresh.length; i+=10){
+        const batch = fresh.slice(i,i+10), no = i/10+1;
+        try{
+          const r = await judge(batch, focus, cfg);
+          const used = new Set();
           r.forEach(o => {
-            const it = kept[o.i]; if(!it) return;
-            it.score = Math.max(0, Math.min(10, Number(o.score)||0));
-            it.summary = String(o.summary||'').slice(0,120);
-            it.why = String(o.why||'').slice(0,160);
-            it.category = String(o.category||'').slice(0,20);
+            const idx = Number(o && o.i);
+            const it = batch[idx];
+            if(!it || used.has(idx)) return;
+            used.add(idx);
+            let sc = Number(o.score);
+            if(!Number.isFinite(sc)) sc = 5;
+            it.score = Math.max(0, Math.min(10, Math.round(sc)));
+            it.title_zh = String(o.title_zh||'').replace(/\s+/g,' ').slice(0,120);
+            it.summary  = String(o.summary||'').replace(/\s+/g,' ').slice(0,60);
+            it.why      = String(o.why||'').replace(/\s+/g,' ').slice(0,80);
+            it.category = String(o.category||'').replace(/\s+/g,' ').slice(0,20) || '未分类';
             out.push(it);
           });
+          batch.forEach((it,idx)=>{
+            if(used.has(idx)) return;
+            Object.assign(it,{score:5, summary:String(it.text||'').slice(0,60), why:'模型漏判，按中间分入库', category:'未分类'});
+            out.push(it);
+          });
+          log(`[${c.name}] AI 第 ${no} 批完成：${batch.length} 条`);
+        }catch(e){
+          log(`✗ [${c.name}] AI 第 ${no} 批失败，整批 ${batch.length} 条按 5 分入库：`+String(e.message).slice(0,180));
+          batch.forEach(it=>Object.assign(it,{score:5, summary:String(it.text||'').slice(0,60), why:'AI 判定失败，未打分', category:'未分类'}));
+          out.push(...batch);
         }
-        kept = out;
-        log(`[${c.name}] AI 打分完成：${out.length} 条`);
-      }catch(e){
-        log(`[${c.name}] AI 打分失败，全部按 5 分入库：`+e.message);
-        kept.forEach(x => { x.score=5; x.summary=x.text.slice(0,80); x.why='AI 不可用，未判定'; });
       }
+      const kept = out;
       kept.forEach(x => { x.lv = lvOf(x.score); x.ch = c.id; S.seen[x.id] = 1; });
       S.items = kept.concat(S.items).slice(0, 600);
       added += kept.length;
@@ -933,7 +999,7 @@ function digest(){
         + '<div class="bd">'
         + p.list.map(it => '<div class="dline">'
             + '<span class="dcdot" style="background:'+esc(p.c.color)+'"></span>'
-            + (it.url ? '<a href="'+esc(it.url)+'" target="_blank" rel="noopener">'+esc(it.title)+'</a>' : '<span>'+esc(it.title)+'</span>')
+            + (it.url ? '<a href="'+esc(it.url)+'" target="_blank" rel="noopener" title="原文：'+esc(it.title)+'">'+esc(it.title_zh || it.title)+'</a>' : '<span>'+esc(it.title_zh || it.title)+'</span>')
             + (it.summary ? '<p>'+esc(it.summary)+'</p>' : '')
             + '</div>').join('')
         + '<div class="mt"><span>'+esc(p.c.name)+'</span><span>'+esc((p.c.feeds||[]).length)+' 个源</span>'
@@ -943,6 +1009,25 @@ function digest(){
 }
 
 /* ══════════ 渲染 ══════════ */
+const SRC_CN = {
+  'bbc.co.uk':'BBC 中文', 'bbc.com':'BBC 中文', 'news.google.com':'谷歌新闻',
+  'skysports.com':'天空体育', 'theathletic.com':'The Athletic', 'espn.com':'ESPN',
+  'reuters.com':'路透社', 'apnews.com':'美联社', 'nytimes.com':'纽约时报',
+  'theguardian.com':'卫报', 'wsj.com':'华尔街日报', 'ft.com':'金融时报',
+  'arstechnica.com':'Ars 技术', 'techcrunch.com':'科技 crunch', 'theverge.com':'The Verge',
+  'github.com':'GitHub', 'openai.com':'OpenAI', 'nature.com':'自然期刊',
+  'science.org':'科学期刊', 'who.int':'世界卫生组织', 'fda.gov':'美国 FDA',
+  'ema.europa.eu':'欧洲药管局', 'nih.gov':'美国国立卫生研究院',
+  'ruanyifeng.com':'阮一峰的网络日志', 'sspai.com':'少数派', '36kr.com':'36氪',
+  'v2ex.com':'V2EX', 'infoq.cn':'InfoQ', 'zhihu.com':'知乎', 'weibo.com':'微博',
+  'example.com':'示例', 'lancet.com':'柳叶刀', 'statista.com':'Statista'
+};
+function srcCN(s){
+  if(!s) return '未知源';
+  const k = String(s).toLowerCase().replace(/^www\./,'');
+  for(const key in SRC_CN) if(k.includes(key)) return SRC_CN[key];
+  return s;
+}
 function card(it){
   const cls = it.lv==='hi' ? 's-hi' : (it.lv==='mid' ? 's-mid' : 's-low');
   const body = (it.summary || it.text || '')
@@ -951,11 +1036,11 @@ function card(it){
   return `<article class="item" draggable="true" data-id="${esc(it.id)}" tabindex="0">
     <button class="del" title="删掉这条">×</button>
     <h4><span class="sc ${cls}" data-act="cycle" data-tip="${it.score} 分 · 点一下改档" aria-label="${it.score} 分"></span>
-      <span class="tt">${it.url?`<a href="${esc(it.url)}" target="_blank" rel="noopener">${esc(it.title)}</a>`:esc(it.title)}</span></h4>
+      <span class="tt">${it.url?`<a href="${esc(it.url)}" target="_blank" rel="noopener" title="原文：${esc(it.title)}">${esc(it.title_zh || it.title)}</a>`:esc(it.title_zh || it.title)}</span></h4>
     <div class="det"><div>
       ${sum ? `<p class="sum">${esc(sum)}</p>` : ''}
       ${why ? `<div class="why">${esc(why)}</div>` : ''}
-      <div class="meta"><span class="src">${esc(it.src||'未知源')}</span>
+      <div class="meta"><span class="src" title="${esc(it.src||'')}">${esc(srcCN(it.src))}</span>
         ${it.category?`<span class="src">${esc(it.category)}</span>`:''}</div>
     </div></div>
   </article>`;
