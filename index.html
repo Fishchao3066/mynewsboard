@@ -394,9 +394,9 @@ textarea{resize:vertical;min-height:74px;line-height:1.55}
     <div class="hint">便宜档 flash，质量档 pro</div>
   </div>
   <div class="fld">
-    <label>CORS 代理（直连失败时兜底）</label>
-    <input id="cProxy" placeholder="https://corsproxy.io/?url=">
-    <div class="hint">源太多被限流时，可换成自建 RSSHub 地址或别的公共代理。</div>
+    <label>CORS 代理（直连失败时兜底，一行一个，自动依次尝试）</label>
+    <textarea id="cProxy" style="min-height:74px" placeholder="https://proxy.corsfix.com/?url={url}">https://proxy.corsfix.com/?url={url}</textarea>
+    <div class="hint">corsproxy.io 现已要求 API Key（免费仅 localhost），线上会 401；默认用 corsfix，免费免 Key。支持 {url} 占位符；一行一个会按顺序回退。</div>
   </div>
   <div class="fld full">
     <div class="row2">
@@ -463,11 +463,17 @@ const uid = () => 'c' + Math.random().toString(36).slice(2,8);
 const CFG_DEF = () => ({
   focus: '', key: '', base: 'https://api.xiaomimimo.com/v1',
   model: 'mimo-v2.6-flash',
-  proxy: 'https://corsproxy.io/?url=',
+  proxy: 'https://proxy.corsfix.com/?url={url}',
   ch: [{id:'ch_def', name:'默认分区', color:'#5b8cff', focus:'', feeds:[], on:true}]
 });
 const LOGS = [];
 const isAll = () => view === '__all';
+function normProxy(p){
+  let a = Array.isArray(p) ? p : (typeof p==='string' ? p.split('\n').map(s=>s.trim()).filter(Boolean) : []);
+  // 旧默认 corsproxy.io 已要求 API Key，线上必 401：自动换成免费可用的 corsfix
+  a = a.map(x => /corsproxy\.io/i.test(x) && !/key=/i.test(x) ? 'https://proxy.corsfix.com/?url={url}' : x);
+  return a.length ? [...new Set(a)] : ['https://proxy.corsfix.com/?url={url}'];
+}
 /* 只读存储，返回初始状态；绝不在这里碰 S（S 还没声明完） */
 function load(){
   let cfg = CFG_DEF(), items = [], seen = {};
@@ -476,6 +482,7 @@ function load(){
     if(raw){
       const o = JSON.parse(raw);
       cfg = Object.assign(CFG_DEF(), o.cfg || {});
+      cfg.proxy = normProxy(cfg.proxy);
       if(!Array.isArray(cfg.ch) || !cfg.ch.length) cfg.ch = CFG_DEF().ch;
       items = Array.isArray(o.items) ? o.items : [];
       seen = (o.seen && typeof o.seen === 'object') ? o.seen : {};
@@ -492,6 +499,7 @@ function load(){
 }
 
 let S = load();
+if(!S.bad) S.bad = {};
 let view = (() => { try{ return localStorage.getItem(K+'_v') || '__all'; }catch(e){ return '__all'; } })();
 
 function save(){ try{ localStorage.setItem(K, JSON.stringify(S)); }catch(e){ log('保存失败：浏览器存储不可用（可能处于隐私模式）'); } }
@@ -548,7 +556,11 @@ function chEditor(){
       const act = el.dataset.act;
       if(act==='color') el.oninput = () => { c.color = el.value; box.querySelector('.hd input[type=text]').style.borderColor = el.value; };
       else if(act==='name')  el.oninput = () => { c.name = el.value; };
-      else if(act==='feeds') el.oninput = () => { c.feeds = el.value.split('\n').map(s=>s.trim()).filter(s=>s && !s.startsWith('#')); };
+      else if(act==='feeds') el.oninput = () => {
+        const old = new Set(c.feeds||[]);
+        c.feeds = el.value.split('\n').map(s=>s.trim()).filter(s=>s && !s.startsWith('#'));
+        c.feeds.forEach(f=>{ if(!old.has(f)){ delete S.bad[f]; save(); } });
+      };
       else if(act==='focus') el.oninput = () => { c.focus = el.value.trim(); };
       else if(act==='toggle') el.onclick = () => { c.on = !c.on; save(); chEditor(); };
       else if(act==='del') el.onclick = () => {
@@ -577,7 +589,7 @@ function fillCfg(){
   $('#cKey').value   = S.cfg.key;
   $('#cBase').value  = S.cfg.base;
   $('#cModel').value = S.cfg.model;
-  $('#cProxy').value = S.cfg.proxy;
+  $('#cProxy').value = Array.isArray(S.cfg.proxy) ? S.cfg.proxy.join('\n') : S.cfg.proxy;
   chEditor();
 }
 function readCfg(){
@@ -585,7 +597,7 @@ function readCfg(){
   S.cfg.key    = $('#cKey').value.trim();
   S.cfg.base   = $('#cBase').value.trim().replace(/\/$/,'');
   S.cfg.model  = $('#cModel').value.trim();
-  S.cfg.proxy  = $('#cProxy').value.trim();
+  S.cfg.proxy  = $('#cProxy').value.split('\n').map(s=>s.trim()).filter(Boolean);
   save();
 }
 $('#bCfg').onclick = () => { fillCfg(); $('#cfg').classList.toggle('show'); };
@@ -606,8 +618,9 @@ $('#fFile').onchange = e => {
     try{
       const o = JSON.parse(r.result);
       const cfg = Object.assign(CFG_DEF(), o.cfg||{});
+      cfg.proxy = normProxy(cfg.proxy);
       if(!Array.isArray(cfg.ch) || !cfg.ch.length) cfg.ch = CFG_DEF().ch;
-      S = { cfg, items:o.items||[], seen:o.seen||{} };
+      S = { cfg, items:o.items||[], seen:o.seen||{}, bad: o.bad||{} };
       save(); fillCfg(); render(); toast('配置已导入');
     }catch(err){ toast('导入失败：不是合法的 JSON'); }
   };
@@ -673,18 +686,37 @@ document.documentElement.setAttribute('data-theme', TH);
 })();
 
 /* ══════════ RSS 解析 ══════════ */
-async function getXML(url, proxy){
+function proxyURL(tpl, url){
+  if(!tpl) return '';
+  const enc = encodeURIComponent(url);
+  return tpl.includes('{url}') ? tpl.replace('{url}', enc) : tpl + enc;
+}
+async function getXML(url, proxies){
   try{
-    const r = await fetch(url, {headers:{'Accept':'application/rss+xml, application/atom+xml, application/xml'}});
-    if(r.ok) return await r.text();
-    throw new Error('HTTP '+r.status);
+    const ac = new AbortController(), tm = setTimeout(()=>ac.abort(), 15000);
+    try{
+      const r = await fetch(url, {headers:{'Accept':'application/rss+xml, application/atom+xml, application/xml'}, signal:ac.signal});
+      if(r.ok) return await r.text();
+      throw new Error('HTTP '+r.status);
+    }finally{ clearTimeout(tm); }
   }catch(e){
-    if(!proxy) throw e;
-    log(`直连失败(${host(url)})，走代理重试`);
-    const pu = proxy.includes('{url}') ? proxy.replace('{url}', encodeURIComponent(url)) : proxy + encodeURIComponent(url);
-    const r = await fetch(pu);
-    if(!r.ok) throw new Error('代理也失败 '+r.status);
-    return await r.text();
+    const list = Array.isArray(proxies) ? proxies : (proxies ? [proxies] : []);
+    if(!list.length) throw e;
+    const errs = [];
+    for(const p of list){
+      try{
+        const pu = proxyURL(p, url);
+        const ac2 = new AbortController(), tm2 = setTimeout(()=>ac2.abort(), 15000);
+        let r;
+        try{ r = await fetch(pu, {signal:ac2.signal}); }
+        finally{ clearTimeout(tm2); }
+        if(!r.ok) throw new Error(String(r.status) + (r.status===401 ? '（代理要求 API Key，请换免费代理或申请 Key）' : ''));
+        const txt = await r.text();
+        if(/<parsererror|corsproxy_error|invalid_origin/i.test(txt.slice(0,300))) throw new Error('代理返回错误页');
+        return txt;
+      }catch(err){ errs.push(new URL(p).hostname + ':' + err.message); }
+    }
+    throw new Error('直连与代理均失败：' + errs.slice(0,3).join('；'));
   }
 }
 function pick(t, tags){
@@ -800,12 +832,17 @@ $('#bPull').onclick = async () => {
       const focus = [cfg.focus, c.focus].filter(Boolean).join('\n该分区专属：');
       let fresh = [];
       for(const f of c.feeds){
+        if((S.bad[f]||0) >= 3){ log(`[${c.name}] ${host(f)}：已连续失败 3 次，暂跳过（在设置里改动地址可重置）`); continue; }
         try{
           const xml = await getXML(f, cfg.proxy);
           const arr = parse(xml, host(f)).filter(x => !S.seen[x.id]);
+          delete S.bad[f];
           log(`[${c.name}] ${host(f)}：${arr.length} 条新`);
           fresh = fresh.concat(arr);
-        }catch(e){ log(`✗ [${c.name}] ${host(f)}：${e.message}`); }
+        }catch(e){
+          S.bad[f] = (S.bad[f]||0) + 1;
+          log(`✗ [${c.name}] ${host(f)}（失败 ${S.bad[f]}/3）：${e.message}`);
+        }
       }
       if(!fresh.length){ log(`[${c.name}] 没有新内容`); continue; }
 
