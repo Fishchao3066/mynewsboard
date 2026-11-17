@@ -353,7 +353,7 @@ textarea{resize:vertical;min-height:74px;line-height:1.55}
 <nav id="tabs"></nav>
 
 <header>
-  <div class="logo"><span class="dot"></span>我的信息台<small id="chTip">分区</small></div>
+  <div class="logo"><span class="dot"></span>我的信息台<small id="chTip">分区</small><small style="color:var(--hi);font-size:10px" title="构建版本">v3.4</small></div>
   <div class="sp"></div>
   <button class="btn" id="bDemo">载入演示</button>
   <button class="btn pri" id="bPull">拉取更新</button>
@@ -405,6 +405,7 @@ https://r.jina.ai/{url}</textarea>
       <button class="btn" id="bExport">导出配置</button>
       <button class="btn" id="bImport">导入配置</button>
       <button class="btn" id="bClear">清空已读记录</button>
+      <button class="btn" id="bFixProxy" title="把代理一键换成线上可用的地址">一键修复代理</button>
       <input type="file" id="fFile" accept=".json" style="display:none">
     </div>
     <div class="hint">换电脑或换浏览器时用导出/导入搬家；Key 也会一起导出，注意别把文件发到群里。</div>
@@ -634,6 +635,11 @@ $('#bClear').onclick = () => {
     S.seen = {}; save(); toast('已读记录已清空');
   });
 };
+$('#bFixProxy').onclick = () => {
+  S.cfg.proxy = normProxy([]);
+  S.bad = {};
+  save(); fillCfg(); toast('代理已修复为：allorigins + r.jina.ai。现在点「拉取更新」重试');
+};
 
 /* ══════════ 跳转：统计条 ── 只滚动 + 高亮，绝不隐藏任何卡片 ══════════ */
 function jumpTo(sel){
@@ -830,6 +836,7 @@ $('#bPull').onclick = async () => {
   if(!cfg.key) return sheet('还没填 API Key', '不填 Key 只能看演示数据。到「设置」里贴一个 MiMo 或 DeepSeek 的 Key，存在你自己浏览器里。', ()=>{ $('#cfg').classList.add('show'); fillCfg(); }, '去填');
 
   busy = true; $('#bPull').disabled = true; $('#log').classList.add('show');
+  log(`构建 v3.4 · 当前代理：${(Array.isArray(cfg.proxy)?cfg.proxy:[cfg.proxy]).join(' | ')}`);
   let added = 0;
   try{
     for(const c of chs){
