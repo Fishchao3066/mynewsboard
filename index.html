@@ -1,10 +1,10 @@
 <!DOCTYPE html>
-<html lang="zh-CN" data-theme="dark">
+<html lang="zh-CN">
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
 <meta name="theme-color" content="#0b0d12">
-<meta name="description" content="个人 AI 信息工作台：RSS + 大模型打分，自动分栏。单文件、本地存储、无后端。">
+<meta name="description" content="个人 AI 信息工作台：分区订阅 + 大模型打分 + 锚点跳转">
 <title>我的信息台</title>
 <style>
 :root{
@@ -12,6 +12,7 @@
   --line:#262c3a; --txt:#e6e8ee; --dim:#8b93a7; --dim2:#5f6678;
   --acc:#5b8cff; --acc2:#7c5cff;
   --hi:#ff5d5d; --mid:#ffb020; --low:#3ecf8e;
+  --fg:#e6e8ee;
   --shadow:0 8px 24px rgba(0,0,0,.35);
   --r:14px;
 }
@@ -19,10 +20,11 @@ html[data-theme="light"]{
   --bg:#f4f6fa; --bg2:#fff; --card:#fff; --card2:#f7f8fb;
   --line:#e3e7ef; --txt:#1a1d26; --dim:#6b7286; --dim2:#9aa1b1;
   --acc:#2f6bff; --acc2:#6b46e5;
+  --fg:#1a1d26;
   --shadow:0 6px 20px rgba(20,30,60,.08);
 }
 *{box-sizing:border-box;-webkit-tap-highlight-color:transparent}
-html,body{margin:0;padding:0}
+html,body{margin:0;padding:0;scroll-behavior:smooth}
 body{
   background:var(--bg); color:var(--txt);
   font-family:-apple-system,BlinkMacSystemFont,"Segoe UI","PingFang SC","Hiragino Sans GB","Microsoft YaHei",sans-serif;
@@ -37,11 +39,11 @@ button{cursor:pointer;border:none;background:none}
 
 /* ── 顶栏 ── */
 header{
-  position:sticky;top:0;z-index:50;
+  position:sticky;top:0;z-index:60;
   background:color-mix(in srgb,var(--bg) 88%,transparent);
   backdrop-filter:blur(14px);-webkit-backdrop-filter:blur(14px);
   border-bottom:1px solid var(--line);
-  padding:10px 16px;display:flex;align-items:center;gap:10px;flex-wrap:wrap;
+  padding:10px 16px;display:flex;align-items:center;gap:8px;flex-wrap:wrap;
 }
 .logo{font-weight:700;font-size:16px;letter-spacing:.3px;display:flex;align-items:center;gap:7px}
 .logo .dot{width:9px;height:9px;border-radius:50%;background:linear-gradient(135deg,var(--acc),var(--acc2));box-shadow:0 0 12px var(--acc)}
@@ -55,12 +57,25 @@ header{
 .btn.pri{background:linear-gradient(135deg,var(--acc),var(--acc2));color:#fff;border-color:transparent;font-weight:600}
 .btn.pri:disabled{opacity:.5;cursor:not-allowed}
 .btn.on{border-color:var(--acc);color:var(--acc)}
-.btn.pri.loading{opacity:.85;cursor:progress}
-.btn.pri.loading::before{
-  content:"";display:inline-block;width:11px;height:11px;border:2px solid rgba(255,255,255,.45);
-  border-top-color:#fff;border-radius:50%;margin-right:7px;vertical-align:-1px;animation:spin .7s linear infinite;
+
+/* ── 轻提示 ── */
+#toast{
+  position:fixed;left:50%;bottom:78px;z-index:120;transform:translate(-50%,10px);
+  background:var(--fg);color:var(--bg);font-size:12.5px;font-weight:500;
+  padding:9px 16px;border-radius:10px;box-shadow:var(--shadow);
+  opacity:0;pointer-events:none;transition:.24s;max-width:86vw;text-align:center;
 }
-@keyframes spin{to{transform:rotate(360deg)}}
+#toast.show{opacity:.94;transform:translate(-50%,0)}
+
+/* ── 回到顶部 ── */
+#toTop{
+  position:fixed;right:20px;bottom:24px;z-index:60;width:42px;height:42px;
+  border-radius:50%;background:var(--card);border:1px solid var(--line);color:var(--dim);
+  font-size:17px;cursor:pointer;box-shadow:var(--shadow);
+  opacity:0;pointer-events:none;transform:translateY(8px);transition:.22s;
+}
+#toTop.show{opacity:1;pointer-events:auto;transform:translateY(0)}
+#toTop:hover{background:var(--acc);border-color:var(--acc);color:#fff}
 
 /* ── 配置区 ── */
 #cfg{
@@ -80,109 +95,265 @@ textarea{resize:vertical;min-height:74px;line-height:1.55}
 .fld.full{grid-column:1/-1}
 .row2{display:flex;gap:8px;flex-wrap:wrap}
 
-/* ── 统计条 ── */
-#bar{
-  display:flex;gap:8px;padding:12px 16px;overflow-x:auto;
+/* ── 分区编辑器 ── */
+#chList{display:flex;flex-direction:column;gap:10px}
+.ch{
+  border:1px solid var(--line);border-radius:12px;padding:11px 12px;
+  background:var(--card);display:flex;flex-direction:column;gap:8px;
+}
+.ch.off{opacity:.45}
+.ch .hd{display:flex;align-items:center;gap:8px}
+.ch .hd input[type=text]{flex:1;font-weight:600;padding:6px 9px}
+.ch .pick{width:34px;height:34px;border:1px solid var(--line);border-radius:9px;padding:2px;cursor:pointer;flex:none;background:var(--card2)}
+.ch .mini{
+  font-size:11px;padding:5px 9px;border:1px solid var(--line);border-radius:8px;
+  background:var(--card2);color:var(--dim);white-space:nowrap;
+}
+.ch .mini:hover{border-color:var(--acc);color:var(--acc)}
+.ch .mini.danger:hover{border-color:var(--hi);color:var(--hi)}
+.ch textarea{min-height:64px;font-size:12.5px}
+.ch .lb{font-size:11px;color:var(--dim2)}
+
+/* ── 状态条（只读，不跳转） ── */
+.stats{
+  display:flex;gap:8px;flex-wrap:wrap;padding:10px 16px;
   border-bottom:1px solid var(--line);background:var(--bg);
 }
 .stat{
   flex:1;min-width:104px;background:var(--card);border:1px solid var(--line);
-  border-radius:12px;padding:9px 12px;cursor:pointer;transition:.15s;
+  border-radius:12px;padding:9px 12px;cursor:default;
 }
-.stat:hover{transform:translateY(-2px);box-shadow:var(--shadow)}
-.stat.act{border-color:var(--acc)}
 .stat b{display:block;font-size:20px;line-height:1.2}
 .stat span{font-size:11px;color:var(--dim)}
 .stat i{font-style:normal;font-size:10px;color:var(--dim2)}
+.skip{position:absolute;left:-9999px;top:8px;z-index:99;background:var(--acc);color:#fff;padding:6px 12px;border-radius:8px;font-size:12px}
+.skip:focus{left:12px}
 
-/* ── 看板 ── */
+/* ── 视图标签栏 ── */
+#tabs{
+  display:flex;gap:6px;padding:10px 16px 0;overflow-x:auto;
+  border-bottom:1px solid var(--line);background:var(--bg);
+  scrollbar-width:none;
+}
+#tabs::-webkit-scrollbar{display:none}
+.tab{
+  flex:none;display:flex;align-items:center;gap:6px;
+  padding:8px 13px 9px;font-size:12.5px;font-weight:600;color:var(--dim);
+  background:var(--card);border:1px solid var(--line);border-bottom:none;
+  border-radius:10px 10px 0 0;cursor:pointer;position:relative;top:1px;
+  white-space:nowrap;transition:.16s;
+}
+.tab:hover{color:var(--acc)}
+.tab.on{color:var(--acc);background:var(--bg2);border-color:var(--acc);box-shadow:0 -2px 0 var(--acc) inset}
+.tab .td{width:8px;height:8px;border-radius:50%;flex:none}
+.tab .tn{font-size:10.5px;font-weight:500;color:var(--dim2);background:var(--card2);border-radius:6px;padding:1px 5px}
+.tab.on .tn{color:var(--acc)}
+.tab.all{font-weight:700}
+.tab.off{opacity:.5;text-decoration:line-through;text-decoration-color:var(--dim2)}
+#bar{min-width:0}
+
+/* ── 总看板分组小标题 ── */
+.ghd{
+  display:flex;align-items:center;gap:8px;flex-wrap:wrap;
+  padding:9px 12px 7px;margin-bottom:10px;font-size:12px;font-weight:600;color:var(--dim);
+  background:var(--card);border:1px solid var(--line);
+  border-left:3px solid var(--c,var(--acc));border-radius:10px;
+  scroll-margin-top:66px;transition:box-shadow .3s,border-color .3s;
+}
+.ghd.flash{border-color:var(--acc);box-shadow:0 0 0 4px color-mix(in srgb,var(--acc) 22%,transparent)}
+.ghd .gap{margin-left:auto;display:flex;gap:6px}
+.ghd .go{font-size:10.5px;font-weight:500;color:var(--dim2);border:1px solid var(--line);border-radius:7px;padding:2px 7px}
+.ghd .go:hover{color:var(--acc);border-color:var(--acc)}
+.ghd .cnt{font-size:10.5px;color:var(--dim2);font-weight:500}
+
+/* ── 摘要条 ── */
+#dig{padding:12px 16px 0}
+.dig{
+  background:linear-gradient(135deg,color-mix(in srgb,var(--acc) 7%,var(--card)),var(--card));
+  border:1px solid var(--line);border-radius:var(--r);padding:12px 14px;
+}
+.dig h3{margin:0 0 9px;font-size:12.5px;font-weight:700;color:var(--dim);display:flex;align-items:center;gap:7px;flex-wrap:wrap}
+.dig h3 .n{font-size:10.5px;color:var(--dim2);font-weight:500}
+.digrow{display:flex;gap:9px;padding:6px 0;border-top:1px dashed var(--line);font-size:12.5px;line-height:1.5}
+.digrow:first-of-type{border-top:none}
+.digrow .rk{flex:none;width:17px;height:17px;border-radius:5px;background:var(--card2);color:var(--dim2);
+  font-size:10px;font-weight:700;display:grid;place-items:center;margin-top:1px}
+.digrow .rk.hi{background:var(--hi);color:#fff}
+.digrow .bd{flex:1;min-width:0}
+.digrow a{color:var(--fg);text-decoration:none;font-weight:600}
+.digrow a:hover{color:var(--acc)}
+.digrow p{margin:2px 0 0;font-size:11.5px;color:var(--dim);line-height:1.45}
+.digrow .mt{margin-top:3px;display:flex;gap:6px;flex-wrap:wrap;font-size:10px;color:var(--dim2)}
+.digrow .dline{padding:3px 0}
+.digrow .dline a{font-weight:600;font-size:12.5px}
+.digrow .dline p{margin:1px 0 2px;font-size:11.5px;color:var(--dim);line-height:1.45}
+.digrow .dline{display:flex;align-items:flex-start;gap:6px}
+.digrow .dline .dcdot{width:7px;height:7px;border-radius:50%;flex:none;margin-top:5px}
+.digrow .mt b{font-weight:600;color:var(--mid)}
+
+/* ══════════ 总看板：分区栏并排 ══════════ */
 #board{
-  display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:14px;
-  padding:16px;align-items:start;
+  padding:14px 16px 10px;display:flex;gap:12px;align-items:flex-start;
+  overflow-x:auto;padding-bottom:14px;
 }
-.col{background:var(--bg2);border:1px solid var(--line);border-radius:var(--r);min-height:180px;transition:.15s}
-.col.over{border-color:var(--acc);background:color-mix(in srgb,var(--acc) 7%,var(--bg2))}
-.col>h3{
-  margin:0;padding:12px 14px 10px;font-size:13px;font-weight:700;
-  display:flex;align-items:center;gap:7px;border-bottom:1px solid var(--line);
-  position:sticky;top:53px;background:var(--bg2);border-radius:var(--r) var(--r) 0 0;z-index:5;
+.zcol{
+  flex:1 1 0;min-width:212px;max-width:420px;
+  background:var(--card);border:1px solid var(--line);border-top:3px solid var(--c,var(--acc));
+  border-radius:var(--r);display:flex;flex-direction:column;overflow:hidden;
+  transition:box-shadow .2s,transform .2s;
 }
-.col>h3 .n{font-size:11px;color:var(--dim2);font-weight:500}
-.col>h3 .tag{width:8px;height:8px;border-radius:3px}
-.c1 .tag{background:var(--hi)} .c2 .tag{background:var(--mid)} .c3 .tag{background:var(--low)}
-.list{padding:10px;display:flex;flex-direction:column;gap:9px;min-height:120px}
-.item{
-  background:var(--card);border:1px solid var(--line);border-radius:12px;
-  padding:11px 12px;cursor:grab;transition:.15s;position:relative;
+.zcol:hover{box-shadow:0 10px 26px -16px rgba(0,0,0,.6)}
+.zcol.off{opacity:.55}
+/* 分区头：常显，恒为一行，绝不挤压换行 */
+.zchd{
+  display:flex;align-items:center;gap:7px;padding:9px 11px;flex:none;
+  border-bottom:1px solid var(--line);background:var(--card2);
 }
-.item:hover{border-color:var(--acc);transform:translateY(-1px);box-shadow:var(--shadow)}
-.item.drag{opacity:.35}
-.item h4{margin:0 0 5px;font-size:14px;line-height:1.45;font-weight:600;padding-right:26px}
-.item p{margin:0;font-size:12.5px;color:var(--dim);line-height:1.55}
-.item .meta{margin-top:8px;display:flex;align-items:center;gap:8px;flex-wrap:wrap;font-size:11px;color:var(--dim2)}
-.item .src{background:var(--card2);padding:2px 7px;border-radius:6px;max-width:130px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-.item .sc{font-weight:700;padding:2px 7px;border-radius:6px;font-size:11px;cursor:pointer}
-.s-hi{background:color-mix(in srgb,var(--hi) 18%,transparent);color:var(--hi)}
-.s-mid{background:color-mix(in srgb,var(--mid) 18%,transparent);color:var(--mid)}
-.s-low{background:color-mix(in srgb,var(--low) 18%,transparent);color:var(--low)}
-.item .why{margin-top:7px;font-size:11.5px;color:var(--acc);background:color-mix(in srgb,var(--acc) 10%,transparent);padding:6px 8px;border-radius:8px;line-height:1.5}
-.item .del{position:absolute;top:8px;right:8px;color:var(--dim2);font-size:15px;line-height:1;padding:2px 5px;border-radius:6px;opacity:0;transition:.15s}
-.item:hover .del{opacity:1}
-.item .del:hover{color:var(--hi);background:color-mix(in srgb,var(--hi) 12%,transparent)}
-.empty{text-align:center;color:var(--dim2);font-size:12px;padding:26px 10px;border:1px dashed var(--line);border-radius:12px}
+.zchd .cdot{width:9px;height:9px;border-radius:50%;background:var(--c);flex:none}
+.zchd .cn{font-size:13px;font-weight:700;letter-spacing:.2px;white-space:nowrap;
+  overflow:hidden;text-overflow:ellipsis;min-width:0}
+.zchd .cnt{font-size:10px;font-weight:600;color:var(--dim2);background:var(--bg2);
+  border:1px solid var(--line);border-radius:20px;padding:1px 6px;flex:none;margin-left:auto}
+.zchd .go{font-size:10px;font-weight:500;color:var(--dim2);border:1px solid var(--line);
+  border-radius:6px;padding:2px 6px;flex:none;opacity:0;transition:.16s;white-space:nowrap}
+.zcol:hover .zchd .go{opacity:1}
+.zchd .go:hover{color:var(--c);border-color:var(--c)}
+/* 栏体：常显不折叠；内部按必读/该看/扫一眼三段 */
+.zbody{padding:9px 10px 11px;display:flex;flex-direction:column;gap:9px;overflow-y:auto;max-height:66vh}
+.zsec{border:1px solid var(--line);border-radius:10px;overflow:hidden;background:var(--bg2)}
+.zsec>.sh{
+  display:flex;align-items:center;gap:6px;padding:6px 9px;font-size:10.5px;font-weight:700;
+  color:var(--dim);background:var(--card2);border-bottom:1px solid var(--line);
+}
+.zsec>.sh .tag{width:7px;height:7px;border-radius:2px;flex:none}
+.zsec>.sh .n{margin-left:auto;font-weight:600;color:var(--dim2)}
+.zsec>.list{padding:7px;display:flex;flex-direction:column;gap:6px}
+.zsec.flat>.list{padding:4px 7px;gap:0}
+.zempty{padding:7px 9px;font-size:11px;color:var(--dim2);opacity:.7}
 
-/* ── 骨架 ── */
-.sk{border:1px solid var(--line);border-radius:12px;background:var(--card);padding:12px;animation:pulse 1.15s ease-in-out infinite}
-.sk i{display:block;background:var(--line);border-radius:6px;height:12px;margin-bottom:9px}
-.sk i.w70{width:70%} .sk i.w85{width:85%} .sk i.w40{width:40%}
-@keyframes pulse{0%,100%{opacity:.45}50%{opacity:1}}
+/* ── 新闻条目：默认只留标题，悬停展开详情 ── */
+.item{
+  position:relative;padding:6px 8px;border-radius:8px;cursor:default;
+  transition:background .18s;
+}
+.item:hover,.item:focus-within{background:var(--card)}
+.item .del{
+  position:absolute;right:5px;top:5px;width:18px;height:18px;padding:0;
+  display:flex;align-items:center;justify-content:center;
+  border-radius:5px;font-size:13px;line-height:1;color:var(--dim2);
+  background:var(--bg2);border:1px solid var(--line);opacity:0;
+  transition:opacity .15s,color .15s,border-color .15s,background .15s;z-index:3;
+}
+.item:hover .del{opacity:1}
+.item .del:hover{color:var(--hi);border-color:var(--hi)}
+.item h4{
+  margin:0;font-size:12px;font-weight:600;line-height:1.45;
+  display:flex;align-items:flex-start;gap:6px;padding-right:24px;position:relative;
+}
+.item h4 a{color:var(--txt);text-decoration:none}
+.item h4 a:hover{color:var(--acc)}
+.item h4 .sc{
+  flex:none;width:7px;height:7px;border-radius:50%;padding:0;
+  margin-top:6px;cursor:pointer;line-height:1;font-size:0;
+  box-shadow:0 0 0 3px rgba(120,120,128,.16);
+}
+.item h4 .sc::after{content:attr(data-tip);
+  position:absolute;left:0;top:-19px;white-space:nowrap;font-size:10px;line-height:1;
+  background:var(--fg);color:var(--bg);padding:3px 6px;border-radius:5px;
+  opacity:0;pointer-events:none;transition:.15s;z-index:5}
+.item h4 .sc:hover::after{opacity:1}
+.s-hi{background:color-mix(in srgb,var(--hi) 22%,transparent);color:var(--hi)}
+.s-mid{background:color-mix(in srgb,var(--mid) 24%,transparent);color:var(--mid)}
+.s-low{background:color-mix(in srgb,var(--low) 26%,transparent);color:var(--low)}
+.item h4 .tt{display:block;min-width:0}
+/* 详情：默认收起，hover/focus 才展开 */
+.det{
+  display:grid;grid-template-rows:0fr;opacity:0;
+  transition:grid-template-rows .24s cubic-bezier(.3,.8,.3,1),opacity .2s,margin .24s;
+}
+.item:hover .det,.item:focus-within .det{grid-template-rows:1fr;opacity:1;margin-top:5px}
+.det>div{overflow:hidden}
+.item .sum{margin:0;font-size:11.5px;line-height:1.55;color:var(--dim)}
+.item .why{margin:5px 0 0;font-size:11px;line-height:1.5;color:var(--dim2);
+  padding-left:7px;border-left:2px solid var(--acc)}
+.item .meta{margin-top:5px;display:flex;gap:5px;flex-wrap:wrap;font-size:10px;color:var(--dim2)}
+.item .meta .src{background:var(--bg2);border:1px solid var(--line);border-radius:4px;padding:0 4px}
+
+/* ── 分区页：必读/该看/扫一眼 三栏并排 ── */
+.subgrid{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:12px;align-items:start}
+.sub{background:var(--card);border:1px solid var(--line);border-top:3px solid var(--c);
+  border-radius:var(--r);overflow:hidden}
+.sub>.sh{display:flex;align-items:center;gap:7px;padding:9px 11px;font-size:12px;font-weight:700;
+  color:var(--dim);background:var(--card2);border-bottom:1px solid var(--line)}
+.sub>.sh .tag{width:8px;height:8px;border-radius:2px;background:var(--c);flex:none}
+.sub>.sh .n{margin-left:auto;font-size:10.5px;font-weight:600;color:var(--dim2)}
+.sub>.list{padding:7px;display:flex;flex-direction:column;gap:2px;min-height:90px}
+.sub.over{outline:2px dashed var(--acc);outline-offset:-1px}
+.phead{display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin:0 0 11px;font-size:12px;color:var(--dim)}
+.phead .nm{font-size:15px;font-weight:700;color:var(--txt);display:flex;align-items:center;gap:7px}
+.phead .nm i{width:10px;height:10px;border-radius:3px;flex:none}
+.phead .cnt{font-size:10.5px;font-weight:600;color:var(--dim2);background:var(--card);
+  border:1px solid var(--line);border-radius:20px;padding:2px 8px}
+.phead .sp{flex:1}
+.phead .go{font-size:10.5px;color:var(--dim2);border:1px solid var(--line);border-radius:7px;padding:3px 9px}
+.phead .go:hover{color:var(--acc);border-color:var(--acc)}
+.zempty.all{padding:40px 16px;text-align:center;font-size:12px;color:var(--dim2);line-height:1.7}
+
+@media(max-width:900px){
+  #board{display:flex;overflow-x:auto;scroll-snap-type:x mandatory}
+  .zcol{flex:0 0 84%;scroll-snap-align:start}
+  .zbody{max-height:none}
+  .subgrid{grid-template-columns:1fr}
+}
+@media(max-width:560px){
+  .zcol{flex:0 0 90%}
+  .item .det{grid-template-rows:1fr;opacity:1;margin-top:5px}
+  .item .del{opacity:.75}
+  .zchd .go{opacity:1}
+}
+@media(hover:none){
+  .item .det{grid-template-rows:1fr;opacity:1;margin-top:5px}
+  .item .del{opacity:.75}
+  .zchd .go{opacity:1}
+}
 
 /* ── 日志（可折叠） ── */
 #logWrap{margin:0 16px 18px}
-#logHead{
-  display:flex;align-items:center;gap:8px;padding:8px 12px;background:var(--bg2);
-  border:1px solid var(--line);border-radius:10px;cursor:pointer;font-size:12px;color:var(--dim);
-}
+#logHead{display:flex;align-items:center;gap:8px;padding:8px 12px;background:var(--bg2);
+  border:1px solid var(--line);border-radius:10px;cursor:pointer;font-size:12px;color:var(--dim)}
 #logHead b{font-weight:600;color:var(--txt)}
 #logHead .arw{display:inline-block;transition:transform .2s}
 #logHead .grow{flex:1}
 #logWrap.closed #logHead .arw{transform:rotate(-90deg)}
-#logBadge{display:none;background:var(--acc);color:#fff;border-radius:9px;padding:0 6px;font-size:10px}
-#logBadge.show{display:inline-block}
-#log{
-  display:block;margin:8px 0 0;background:var(--card);border:1px solid var(--line);
+#log{display:block;margin:8px 0 0;background:var(--card);border:1px solid var(--line);
   border-radius:12px;padding:11px 13px;font-size:12px;color:var(--dim);
-  font-family:ui-monospace,SFMono-Regular,Menlo,monospace;max-height:150px;overflow:auto;line-height:1.7;
-}
+  font-family:ui-monospace,SFMono-Regular,Menlo,monospace;max-height:150px;overflow:auto;line-height:1.7}
 #logWrap.closed #log{display:none}
+#cfg .cbody{max-height:76vh;overflow:auto}
 
-/* ── 弹层 ── */
+/* ── 弹层与遮罩 ── */
 #mask{position:fixed;inset:0;background:rgba(0,0,0,.55);display:none;z-index:80;backdrop-filter:blur(3px)}
 #mask.show{display:block}
 #sheet{
   position:fixed;left:0;right:0;bottom:0;z-index:90;
   background:var(--bg2);border-top:1px solid var(--line);
   border-radius:20px 20px 0 0;padding:18px 18px calc(18px + env(safe-area-inset-bottom));
-  transform:translateY(102%);transition:transform .28s cubic-bezier(.3,.8,.3,1);max-height:88vh;overflow:auto;
+  transform:translateY(102%);transition:transform .28s cubic-bezier(.3,.8,.3,1);
+  max-height:88vh;overflow:auto;visibility:hidden;
 }
-#sheet.show{transform:translateY(0)}
+#sheet.show{transform:translateY(0);visibility:visible}
 #sheet .bar{width:38px;height:4px;background:var(--line);border-radius:4px;margin:0 auto 14px}
 #sheet h2{margin:0 0 4px;font-size:17px}
 #sheet .sub{font-size:12px;color:var(--dim);margin-bottom:14px;line-height:1.6}
-
-@media(max-width:900px){
-  #board{grid-template-columns:1fr;gap:12px;padding:12px}
-  .col>h3{position:static;border-radius:var(--r) var(--r) 0 0}
-  .stat{min-width:calc(50% - 4px)}
-  .item{cursor:default}
-  .item h4{padding-right:22px}
-}
 </style>
 </head>
 <body>
 
+<a class="skip" href="#board">跳到内容</a>
+<nav id="tabs"></nav>
+
 <header>
-  <div class="logo"><span class="dot"></span>我的信息台<small>AI 分栏</small></div>
+  <div class="logo"><span class="dot"></span>我的信息台<small id="chTip">分区</small></div>
   <div class="sp"></div>
   <button class="btn" id="bDemo">载入演示</button>
   <button class="btn pri" id="bPull">拉取更新</button>
@@ -190,37 +361,42 @@ textarea{resize:vertical;min-height:74px;line-height:1.55}
 </header>
 
 <section id="cfg">
+  <div class="cbody"><div class="cinner">
   <div class="fld full">
-    <label>关注点（写给 AI 的订阅画像）</label>
+    <label>全局关注点（所有分区共用）</label>
     <textarea id="cFocus" placeholder="例：我关注 AI 编程工具与 Agent 工程化、独立开发者出海变现、宏观与利率对科技股的影响。不关心娱乐八卦、榜单和纯融资快讯。"></textarea>
     <div class="hint">这段会原样进 AI 提示词，直接决定打分准不准。写得越具体，噪音越少。</div>
   </div>
+
+  <div class="fld full">
+    <label>分区（频道）—— 每个分区独立配 RSS 源，可单独写补充关注点</label>
+    <div id="chList"></div>
+    <div class="row2" style="margin-top:10px">
+      <button class="btn" id="bAddCh">+ 新增分区</button>
+      <button class="btn" id="bPreset">套用推荐分区模板</button>
+    </div>
+    <div class="hint">分区之间不串味：AI 打分时会同时看「全局关注点 + 该分区的补充关注点」，所以同一条新闻在不同分区里得分可以完全不同。</div>
+  </div>
+
   <div class="fld">
     <label>大模型 API Key（MiMo / 任何 OpenAI 兼容接口）</label>
     <input id="cKey" type="password" placeholder="sk-..." autocomplete="off">
-    <div class="hint">只存在你这台设备的浏览器 localStorage，不会上传任何服务器，也不会写进代码仓库。</div>
+    <div class="hint">只存在你这台设备的浏览器 localStorage，不会上传任何服务器。</div>
   </div>
   <div class="fld">
     <label>接口地址</label>
     <input id="cBase" placeholder="https://api.xiaomimimo.com/v1">
-    <div class="hint">默认 https://api.xiaomimimo.com/v1</div>
+    <div class="hint">DeepSeek 填 https://api.deepseek.com/v1</div>
   </div>
   <div class="fld">
     <label>模型名</label>
     <input id="cModel" placeholder="mimo-v2.6-flash">
-    <div class="hint">默认 mimo-v2.6-flash</div>
+    <div class="hint">便宜档 flash，质量档 pro</div>
   </div>
   <div class="fld">
-    <label>CORS 代理（直连失败时自动回退）</label>
+    <label>CORS 代理（直连失败时兜底）</label>
     <input id="cProxy" placeholder="https://corsproxy.io/?url=">
-    <div class="hint">支持 {url} 占位符；留空则禁用代理。可换成自建代理，例如 https://your.workers.dev/?url=</div>
-  </div>
-  <div class="fld">
-    <label>RSS 源（一行一个）</label>
-    <textarea id="cFeeds" style="min-height:96px" placeholder="https://sspai.com/feed
-https://www.ruanyifeng.com/blog/atom.xml
-# 井号开头是注释，会被忽略"></textarea>
-    <div class="hint">公众号 / 微博 / B站 / 知乎可用 RSSHub 拼路由。源必须串行抓取，单个失败不影响其他源。</div>
+    <div class="hint">源太多被限流时，可换成自建 RSSHub 地址或别的公共代理。</div>
   </div>
   <div class="fld full">
     <div class="row2">
@@ -230,42 +406,38 @@ https://www.ruanyifeng.com/blog/atom.xml
       <button class="btn" id="bClear">清空已读记录</button>
       <input type="file" id="fFile" accept=".json" style="display:none">
     </div>
-    <div class="hint">换设备时导出 / 导入 JSON 搬家；文件含 API Key，别外传。用 file:// 双击打开时浏览器 CORS 更严，建议用线上地址做真实拉取。</div>
+    <div class="hint">换电脑或换浏览器时用导出/导入搬家；Key 也会一起导出，注意别把文件发到群里。</div>
   </div>
+  </div></div>
 </section>
 
-<div id="bar">
-  <div class="stat" data-f="hi"><b id="n1">0</b><span>必读</span><i>≥8 分</i></div>
-  <div class="stat" data-f="mid"><b id="n2">0</b><span>该看</span><i>5–7 分</i></div>
-  <div class="stat" data-f="low"><b id="n3">0</b><span>扫一眼</span><i>&lt;5 分</i></div>
-  <div class="stat" data-f="all"><b id="n4">0</b><span>累计入库</span><i>去重后</i></div>
+<div id="dig"></div>
+
+<div class="stats" id="bar">
+  <div class="stat"><b id="n1">0</b><span>必读 ≥8 分</span><i id="scope1">全部分区</i></div>
+  <div class="stat"><b id="n2">0</b><span>该看 5–7 分</span><i id="scope2">全部分区</i></div>
+  <div class="stat"><b id="n3">0</b><span>扫一眼 &lt;5 分</span><i id="scope3">全部分区</i></div>
+  <div class="stat"><b id="n4">0</b><span id="n4t">累计入库</span><i id="scope4">去重后 · 全部分区</i></div>
 </div>
 
-<main id="board">
-  <section class="col c1" data-lv="hi">
-    <h3><span class="tag"></span>必读 <span class="n" id="c1n"></span></h3>
-    <div class="list" data-lv="hi"></div>
-  </section>
-  <section class="col c2" data-lv="mid">
-    <h3><span class="tag"></span>该看 <span class="n" id="c2n"></span></h3>
-    <div class="list" data-lv="mid"></div>
-  </section>
-  <section class="col c3" data-lv="low">
-    <h3><span class="tag"></span>扫一眼 <span class="n" id="c3n"></span></h3>
-    <div class="list" data-lv="low"></div>
-  </section>
-</main>
+<button id="toTop" title="回到顶部" aria-label="回到顶部">↑</button>
+
+<main id="board"></main>
 
 <div id="logWrap" class="closed">
-  <div id="logHead"><span class="arw">▾</span><b>运行日志</b><span id="logBadge"></span><span class="grow"></span><span>每个源的抓取条数与失败原因</span></div>
+  <div id="logHead"><span class="arw">▾</span><b>运行日志</b><span class="grow"></span><span>每个源的抓取条数与失败原因</span></div>
   <div id="log"></div>
 </div>
+
 
 <div id="mask"></div>
 <div id="sheet">
   <div class="bar"></div>
   <h2 id="sTitle"></h2>
   <div class="sub" id="sSub"></div>
+  <div class="fld" id="sBodyWrap" style="display:none">
+    <textarea id="sBody" style="min-height:150px;font-size:12.5px"></textarea>
+  </div>
   <div class="row2">
     <button class="btn pri" id="sGo">执行</button>
     <button class="btn" id="sClose">先不了</button>
@@ -274,44 +446,129 @@ https://www.ruanyifeng.com/blog/atom.xml
 
 <script>
 /* ══════════ 存储 ══════════ */
-const K = 'myboard_v2';
-const CFG_DEF = {
-  focus: '', key: '', base: 'https://api.xiaomimimo.com/v1', model: 'mimo-v2.6-flash',
+const K = 'myboard_v3';
+const COLORS = ['#ff5d5d','#ffb020','#3ecf8e','#5b8cff','#7c5cff','#ff7ab8','#22b8cf','#a3e635'];
+const LV = [
+  {k:'hi',  name:'必读',   cls:'hi',  color:'var(--hi)',  min:8, max:11},
+  {k:'mid', name:'该看',   cls:'mid', color:'var(--mid)', min:5, max:8 },
+  {k:'low', name:'扫一眼', cls:'low', color:'var(--low)', min:0, max:5 }
+];
+const PRESET = [
+  {name:'AI 与工程',  color:'#5b8cff', focus:'AI 编程工具、Agent 工程化、模型能力与成本', feeds:['https://sspai.com/feed','https://www.ruanyifeng.com/blog/atom.xml']},
+  {name:'行业与商业', color:'#ffb020', focus:'科技行业动向、商业模式、出海', feeds:[]},
+  {name:'论文与深度', color:'#3ecf8e', focus:'论文、长文、技术报告，要方法论不要结论', feeds:[]},
+  {name:'随手看',    color:'#8b93a7', focus:'轻松内容、工具推荐、杂谈', feeds:[]}
+];
+const uid = () => 'c' + Math.random().toString(36).slice(2,8);
+const CFG_DEF = () => ({
+  focus: '', key: '', base: 'https://api.xiaomimimo.com/v1',
+  model: 'mimo-v2.6-flash',
   proxy: 'https://corsproxy.io/?url=',
-  feeds: ['https://sspai.com/feed', 'https://www.ruanyifeng.com/blog/atom.xml']
-};
-let S = load();
+  ch: [{id:'ch_def', name:'默认分区', color:'#5b8cff', focus:'', feeds:[], on:true}]
+});
+const LOGS = [];
+const isAll = () => view === '__all';
+/* 只读存储，返回初始状态；绝不在这里碰 S（S 还没声明完） */
 function load(){
+  let cfg = CFG_DEF(), items = [], seen = {};
   try{
-    const o = JSON.parse(localStorage.getItem(K)) || {};
-    return { cfg:{...CFG_DEF, ...(o.cfg||{})}, items: o.items||[], seen: o.seen||{} };
-  }catch(e){ return { cfg:{...CFG_DEF}, items:[], seen:{} }; }
+    const raw = localStorage.getItem(K);
+    if(raw){
+      const o = JSON.parse(raw);
+      cfg = Object.assign(CFG_DEF(), o.cfg || {});
+      if(!Array.isArray(cfg.ch) || !cfg.ch.length) cfg.ch = CFG_DEF().ch;
+      items = Array.isArray(o.items) ? o.items : [];
+      seen = (o.seen && typeof o.seen === 'object') ? o.seen : {};
+    }else{
+      LOGS.push('[init] 没有本地配置，使用默认分区');
+    }
+  }catch(e){
+    LOGS.push('[init] 读取本地配置失败，已回到默认');
+    cfg = CFG_DEF(); items = []; seen = {};
+  }
+  try{ localStorage.setItem(K+'_probe','1'); localStorage.removeItem(K+'_probe'); }
+  catch(e){ LOGS.push('[init] 本地存储不可用，本次改动不会被记住'); }
+  return {cfg, items, seen};
 }
-function save(){ localStorage.setItem(K, JSON.stringify(S)); }
+
+let S = load();
+let view = (() => { try{ return localStorage.getItem(K+'_v') || '__all'; }catch(e){ return '__all'; } })();
+
+function save(){ try{ localStorage.setItem(K, JSON.stringify(S)); }catch(e){ log('保存失败：浏览器存储不可用（可能处于隐私模式）'); } }
+function setView(v){ view = v; try{ localStorage.getItem; localStorage.setItem(K+'_v', v); }catch(e){} render(); }
+const chOf = id => S.cfg.ch.find(c=>c.id===id) || {name:'未分组',color:'#8b93a7',focus:'',on:true};
+
+/* ══════════ 轻提示 ══════════ */
+function toast(msg){
+  let el = $('#toast');
+  if(!el){
+    el = document.createElement('div');
+    el.id = 'toast';
+    document.body.appendChild(el);
+  }
+  el.textContent = msg;
+  el.classList.add('show');
+  clearTimeout(el._t);
+  el._t = setTimeout(()=>el.classList.remove('show'), 2600);
+}
 
 /* ══════════ 工具 ══════════ */
 const $ = s => document.querySelector(s);
 const $$ = s => [...document.querySelectorAll(s)];
 const esc = t => String(t==null?'':t).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 const host = u => { try{ return new URL(u).hostname.replace(/^www\./,''); }catch(e){ return '未知源'; } };
-let logCount = 0;
 function log(m){
-  const el = $('#log');
+  const el = document.getElementById('log');
+  LOGS.push(m);
+  if(!el) return;
+  el.classList.add('show');
+  const w = document.getElementById('logWrap');
+  if(w && w.classList.contains('closed')) w.classList.remove('closed');
   const t = new Date().toLocaleTimeString('zh-CN',{hour12:false});
   el.insertAdjacentHTML('beforeend', `<div>[${t}] ${esc(m)}</div>`);
   el.scrollTop = el.scrollHeight;
-  if($('#logWrap').classList.contains('closed')){
-    const b = $('#logBadge'); b.textContent = logCount; b.classList.add('show');
-  }
 }
-function toast(m){
-  $('#logWrap').classList.remove('closed');
-  $('#logBadge').classList.remove('show');
-  log(m);
+
+/* ══════════ 分区编辑器 ══════════ */
+function chEditor(){
+  $('#chList').innerHTML = S.cfg.ch.map(c => `
+    <div class="ch ${c.on?'':'off'}" data-id="${c.id}">
+      <div class="hd">
+        <input class="pick" type="color" value="${esc(c.color)}" data-act="color" title="分区颜色">
+        <input type="text" value="${esc(c.name)}" data-act="name" placeholder="分区名">
+        <button class="mini" data-act="toggle">${c.on?'已启用 · 停用':'已停用 · 启用'}</button>
+        <button class="mini danger" data-act="del">删除</button>
+      </div>
+      <textarea data-act="feeds" placeholder="这个分区的 RSS 源，一行一个">${esc((c.feeds||[]).join('\n'))}</textarea>
+      <input type="text" data-act="focus" value="${esc(c.focus||'')}" placeholder="分区补充关注点（可留空，留空则只用全局关注点）">
+    </div>`).join('');
+  $$('#chList .ch').forEach(box => {
+    const id = box.dataset.id, c = chOf(id);
+    box.querySelectorAll('[data-act]').forEach(el => {
+      const act = el.dataset.act;
+      if(act==='color') el.oninput = () => { c.color = el.value; box.querySelector('.hd input[type=text]').style.borderColor = el.value; };
+      else if(act==='name')  el.oninput = () => { c.name = el.value; };
+      else if(act==='feeds') el.oninput = () => { c.feeds = el.value.split('\n').map(s=>s.trim()).filter(s=>s && !s.startsWith('#')); };
+      else if(act==='focus') el.oninput = () => { c.focus = el.value.trim(); };
+      else if(act==='toggle') el.onclick = () => { c.on = !c.on; save(); chEditor(); };
+      else if(act==='del') el.onclick = () => {
+        if(S.cfg.ch.length<=1) return log('至少保留一个分区');
+        S.cfg.ch = S.cfg.ch.filter(x=>x.id!==id);
+        S.items = S.items.filter(x=>x.ch!==id);   // 分区删了，它的卡片也一起清掉
+        save(); chEditor(); render(); log('分区已删除，该分区卡片一并清除');
+      };
+    });
+  });
 }
-$('#logHead').onclick = () => {
-  const w = $('#logWrap'); w.classList.toggle('closed');
-  if(!w.classList.contains('closed')) $('#logBadge').classList.remove('show');
+$('#bAddCh').onclick = () => {
+  S.cfg.ch.push({id:uid(), name:'新分区 '+(S.cfg.ch.length+1), color:COLORS[S.cfg.ch.length%COLORS.length], focus:'', feeds:[], on:true});
+  save(); chEditor();
+};
+$('#bPreset').onclick = () => {
+  const have = new Set(S.cfg.ch.map(c=>c.name));
+  const add = PRESET.filter(p=>!have.has(p.name)).map(p => ({id:uid(), ...p}));
+  if(!add.length) return log('推荐分区都已经在列表里了');
+  S.cfg.ch = S.cfg.ch.concat(add); save(); chEditor(); log('已追加 '+add.length+' 个推荐分区，把 RSS 源填进去即可');
 };
 
 /* ══════════ 配置面板 ══════════ */
@@ -321,27 +578,25 @@ function fillCfg(){
   $('#cBase').value  = S.cfg.base;
   $('#cModel').value = S.cfg.model;
   $('#cProxy').value = S.cfg.proxy;
-  $('#cFeeds').value = (S.cfg.feeds||[]).join('\n');
+  chEditor();
 }
 function readCfg(){
   S.cfg.focus  = $('#cFocus').value.trim();
   S.cfg.key    = $('#cKey').value.trim();
-  S.cfg.base   = $('#cBase').value.trim().replace(/\/$/,'') || CFG_DEF.base;
-  S.cfg.model  = $('#cModel').value.trim() || CFG_DEF.model;
+  S.cfg.base   = $('#cBase').value.trim().replace(/\/$/,'');
+  S.cfg.model  = $('#cModel').value.trim();
   S.cfg.proxy  = $('#cProxy').value.trim();
-  S.cfg.feeds  = $('#cFeeds').value.split('\n').map(s=>s.trim()).filter(s=>s && !s.startsWith('#'));
   save();
 }
 $('#bCfg').onclick = () => { fillCfg(); $('#cfg').classList.toggle('show'); };
-$('#bSave').onclick = () => { readCfg(); $('#cfg').classList.remove('show'); toast('配置已存到本机浏览器'); };
+$('#bSave').onclick = () => { readCfg(); $('#cfg').classList.remove('show'); render(); toast('配置已存到本地'); };
 $('#bExport').onclick = () => {
   readCfg();
   const blob = new Blob([JSON.stringify(S,null,2)], {type:'application/json'});
   const a = document.createElement('a');
   a.href = URL.createObjectURL(blob);
   a.download = '我的信息台-配置.json'; a.click();
-  setTimeout(()=>URL.revokeObjectURL(a.href), 2000);
-  toast('已导出配置（含 API Key，注意别外传）');
+  toast('已导出，含 API Key，别外传');
 };
 $('#bImport').onclick = () => $('#fFile').click();
 $('#fFile').onchange = e => {
@@ -350,31 +605,38 @@ $('#fFile').onchange = e => {
   r.onload = () => {
     try{
       const o = JSON.parse(r.result);
-      if(!o || typeof o!=='object') throw new Error('格式不对');
-      S = { cfg:{...CFG_DEF,...(o.cfg||{})}, items:Array.isArray(o.items)?o.items:[], seen:o.seen&&typeof o.seen==='object'?o.seen:{} };
-      S.items.forEach(it=>{ if(!it.lv) it.lv = lvOf(Number(it.score)||0); });
+      const cfg = Object.assign(CFG_DEF(), o.cfg||{});
+      if(!Array.isArray(cfg.ch) || !cfg.ch.length) cfg.ch = CFG_DEF().ch;
+      S = { cfg, items:o.items||[], seen:o.seen||{} };
       save(); fillCfg(); render(); toast('配置已导入');
-    }catch(err){ toast('导入失败：不是合法的配置文件'); }
+    }catch(err){ toast('导入失败：不是合法的 JSON'); }
   };
   r.readAsText(f);
-  e.target.value = '';
 };
 $('#bClear').onclick = () => {
-  sheet('清空已读记录？', '清空后之前抓过的条目会被重新判定一次，可能出现重复。配置不受影响。', () => {
+  sheet('清空已读记录？', '清空后之前抓过的条目会被重新判定一次，可能产生重复。分区和 RSS 源配置不受影响。', () => {
     S.seen = {}; save(); toast('已读记录已清空');
   });
 };
 
-/* ══════════ 统计筛选 ══════════ */
-let filter = 'all';
-function applyFilter(){
-  $$('.item').forEach(it => { it.style.display = (filter==='all' || it.dataset.lv===filter) ? '' : 'none'; });
+/* ══════════ 跳转：统计条 ── 只滚动 + 高亮，绝不隐藏任何卡片 ══════════ */
+function jumpTo(sel){
+  const el = $(sel); if(!el) return;
+  el.scrollIntoView({behavior:'smooth', block:'start'});
+  $$('.flash').forEach(x=>x.classList.remove('flash'));
+  el.classList.add('flash');
+  setTimeout(()=>el.classList.remove('flash'), 1600);
 }
-$$('.stat').forEach(el => el.onclick = () => {
-  filter = el.dataset.f;
-  $$('.stat').forEach(x=>x.classList.toggle('act', x===el && filter!=='all'));
-  applyFilter();
+$$('#bar .stat').forEach(b => b.onclick = () => {
+  const g = b.dataset.go;
+  if(g==='top' || !g) return scrollTo({top:0, behavior:'smooth'});
+  if(!isAll()) setView('__all');
 });
+const topBtn = $('#toTop'); if(topBtn) topBtn.onclick = () => scrollTo({top:0, behavior:'smooth'});
+const _lw = $('#logWrap'); if(_lw && $('#logHead')) $('#logHead').onclick = () => _lw.classList.toggle('closed');
+addEventListener('scroll', () => {
+  if(topBtn) topBtn.classList.toggle('show', scrollY > 500);
+}, {passive:true});
 
 /* ══════════ 弹层 ══════════ */
 let sheetFn = null;
@@ -383,52 +645,47 @@ function sheet(title, sub, fn, goText){
   $('#sGo').textContent = goText || '确认';
   sheetFn = fn; $('#mask').classList.add('show'); $('#sheet').classList.add('show');
 }
-function closeSheet(){ $('#mask').classList.remove('show'); $('#sheet').classList.remove('show'); sheetFn=null; }
-$('#sGo').onclick = () => { const f = sheetFn; closeSheet(); f && f(); };
+function sheet2(title, sub, body, fn, goText){
+  sheet(title, sub, fn, goText);
+  $('#sBodyWrap').style.display = 'block'; $('#sBody').value = body || '';
+}
+function closeSheet(){ $('#mask').classList.remove('show'); $('#sheet').classList.remove('show'); sheetFn=null; $('#sBodyWrap').style.display='none'; }
+$('#sGo').onclick = () => { const f = sheetFn; const v = $('#sBody').value; closeSheet(); f && f(v); };
 $('#sClose').onclick = closeSheet;
 $('#mask').onclick = closeSheet;
 
-/* ══════════ 主题（默认深色） ══════════ */
+/* ══════════ 主题 ══════════ */
 const TH = localStorage.getItem('myboard_theme') || 'dark';
 document.documentElement.setAttribute('data-theme', TH);
 (function(){
   const b = document.createElement('button');
-  b.className = 'btn';
-  b.textContent = TH==='dark' ? '☀' : '☾';
+  b.className = 'btn'; b.textContent = TH==='dark' ? '☀' : '☾';
   b.title = '切换深浅色';
   b.onclick = () => {
     const cur = document.documentElement.getAttribute('data-theme');
     const nx = cur==='dark' ? 'light' : 'dark';
     document.documentElement.setAttribute('data-theme', nx);
     localStorage.setItem('myboard_theme', nx);
-    b.textContent = nx==='dark' ? '☀' : '☾';
+    b.textContent = nx==='dark' ? '☀️' : '🌙';
     document.querySelector('meta[name=theme-color]').setAttribute('content', nx==='dark'?'#0b0d12':'#f4f6fa');
   };
   document.querySelector('header .sp').before(b);
 })();
 
-/* ══════════ RSS 抓取与解析 ══════════ */
-function proxyURL(base, target){
-  if(!base) return '';
-  return base.includes('{url}') ? base.replace('{url}', encodeURIComponent(target)) : base + encodeURIComponent(target);
-}
-async function getXML(url, cfg){
-  const opt = {headers:{Accept:'application/rss+xml, application/atom+xml, application/xml, text/xml'}};
-  const ac = new AbortController(), timer = setTimeout(()=>ac.abort(), 15000);
+/* ══════════ RSS 解析 ══════════ */
+async function getXML(url, proxy){
   try{
-    const r = await fetch(url, {...opt, signal:ac.signal});
-    if(!r.ok) throw new Error('HTTP '+r.status);
-    return await r.text();
+    const r = await fetch(url, {headers:{'Accept':'application/rss+xml, application/atom+xml, application/xml'}});
+    if(r.ok) return await r.text();
+    throw new Error('HTTP '+r.status);
   }catch(e){
-    log(`直连失败(${host(url)}：${e.message})，回退代理`);
-    if(!cfg.proxy) throw new Error('直连失败且未配置 CORS 代理');
-    const ac2 = new AbortController(), timer2 = setTimeout(()=>ac2.abort(), 15000);
-    try{
-      const r2 = await fetch(proxyURL(cfg.proxy, url), {...opt, signal:ac2.signal});
-      if(!r2.ok) throw new Error('代理 HTTP '+r2.status);
-      return await r2.text();
-    }finally{ clearTimeout(timer2); }
-  }finally{ clearTimeout(timer); }
+    if(!proxy) throw e;
+    log(`直连失败(${host(url)})，走代理重试`);
+    const pu = proxy.includes('{url}') ? proxy.replace('{url}', encodeURIComponent(url)) : proxy + encodeURIComponent(url);
+    const r = await fetch(pu);
+    if(!r.ok) throw new Error('代理也失败 '+r.status);
+    return await r.text();
+  }
 }
 function pick(t, tags){
   for(const tag of tags){
@@ -460,229 +717,346 @@ function parse(xml, src){
   const d = new DOMParser().parseFromString(xml, 'text/xml');
   if(d.getElementsByTagName('parsererror').length) throw new Error('不是合法 XML');
   const nodes = [...d.getElementsByTagName('item'), ...d.getElementsByTagName('entry')];
-  return nodes.slice(0,25).map(n=>{
+  return nodes.slice(0, 25).map(n => {
     let url = pickLink(n);
     if(!url) url = pick(n,['guid','id']);
-    if(!url){ const enc = n.getElementsByTagName('enclosure')[0]; if(enc) url = enc.getAttribute('url')||''; }
-    const raw = pick(n,['content:encoded','content','description','summary']);
-    const text = raw.replace(/<[^>]+>/g,' ')
-      .replace(/&nbsp;/g,' ').replace(/&amp;/g,'&').replace(/&lt;/g,'<')
-      .replace(/&gt;/g,'>').replace(/&quot;/g,'"').replace(/&#39;/g,"'")
-      .replace(/\s+/g,' ').trim().slice(0,2000);
-    const fallback = pick(n,['guid','id']) || (src + '-' + Math.random().toString(36).slice(2));
+    const enc = n.getElementsByTagName('enclosure')[0];
+    if(!url && enc) url = enc.getAttribute('url') || '';
+    const body = pick(n,['content:encoded','content','description','summary']) || '';
     return {
-      id: url || fallback,
+      id: url || (pick(n,['guid','id']) || src + Math.random()),
       title: pick(n,['title']) || '(无标题)',
-      url, src, text,
+      url, src,
+      text: body.replace(/<[^>]+>/g,' ').replace(/\s+/g,' ').slice(0, 2000),
       date: pick(n,['pubDate','published','updated','dc:date'])
     };
-  }).filter(x=>x.url || x.title);
+  }).filter(x => x.url || x.title);
 }
 
 /* ══════════ AI 打分 ══════════ */
-async function judge(batch, cfg){
-  const list = batch.map((b,i)=>`${i}. 【${b.src}】${b.title}\n   ${String(b.text||'').slice(0,700)}`).join('\n');
-  const sys = `你是个人信息筛选助手。用户关注点：${cfg.focus || '（未填写，按通用科技视角判断）'}
+async function judge(batch, focus, cfg){
+  const list = batch.map((b,i) => `${i}. 【${b.src}】${b.title}\n   ${b.text.slice(0,700)}`).join('\n');
+  const sys = `你是个人信息筛选助手。用户关注点：${focus || '（未填写，按通用科技视角判断）'}
 对每条信息打 0-10 分：10=必须马上读，7=值得读，4=有空扫，0=无关。
 只输出 JSON 数组，不要 markdown 代码块，不要任何解释。格式：
 [{"i":0,"score":8,"summary":"30字内中文摘要","why":"一句话说清为什么值得他看","category":"标签"}]`;
-  const ac = new AbortController(), timer = setTimeout(()=>ac.abort(), 60000);
-  let r;
-  try{
-    r = await fetch(cfg.base.replace(/\/$/,'') + '/chat/completions', {
-      method:'POST', signal:ac.signal,
-      headers:{'Content-Type':'application/json','Authorization':'Bearer '+cfg.key},
-      body: JSON.stringify({ model:cfg.model, temperature:0.2,
-        messages:[{role:'system',content:sys},{role:'user',content:list}] })
-    });
-    if(!r.ok) throw new Error('模型接口 '+r.status+' '+(await r.text()).slice(0,160));
-    const j = await r.json();
-    const txt = String(j.choices?.[0]?.message?.content || '').trim();
-    // 模型可能包 ```json 或前后废话：截取第一个 [ 到最后一个 ]
-    const s = txt.indexOf('['), e = txt.lastIndexOf(']');
-    if(s<0 || e<=s) throw new Error('模型没返回 JSON 数组');
-    let arr;
-    try{ arr = JSON.parse(txt.slice(s, e+1)); }
-    catch(err){ throw new Error('模型 JSON 解析失败：'+err.message); }
-    if(!Array.isArray(arr)) throw new Error('模型返回不是数组');
-    return arr;
-  }finally{ clearTimeout(timer); }
-}
-function lvOf(sc){ return sc>=8 ? 'hi' : (sc>=5 ? 'mid' : 'low'); }
-function markFallback(list, why){
-  list.forEach(it=>{
-    it.score = 5;
-    it.summary = String(it.text||'').slice(0,30);
-    it.why = why;
-    it.category = it.category || '未分类';
+  const r = await fetch(cfg.base + '/chat/completions', {
+    method:'POST',
+    headers:{'Content-Type':'application/json','Authorization':'Bearer '+cfg.key},
+    body: JSON.stringify({ model: cfg.model, temperature: 0.2,
+      messages:[{role:'system',content:sys},{role:'user',content:list}] })
   });
+  if(!r.ok) throw new Error('模型接口 '+r.status+' '+(await r.text()).slice(0,160));
+  const j = await r.json();
+  let txt = (j.choices?.[0]?.message?.content || '').trim();
+  txt = txt.replace(/^```(?:json)?/i,'').replace(/```$/,'');
+  const s = txt.indexOf('['), e = txt.lastIndexOf(']');
+  if(s<0) throw new Error('模型没返回数组');
+  return JSON.parse(txt.slice(s, e+1));
 }
-function showSk(){
-  $$('.list').forEach(l=>{ l.innerHTML = '<div class="sk"><i class="w70"></i><i class="w85"></i><i class="w40"></i></div>'.repeat(3); });
-}
+const lvOf = sc => sc>=8 ? 'hi' : (sc>=5 ? 'mid' : 'low');
 
-/* ══════════ 拉取主流程 ══════════ */
+/* ══════════ 演示数据 ══════════ */
+const DEMO_CH = [
+  {id:'ch_def', name:'默认分区', color:'#5b8cff', on:true, focus:'', feeds:['https://www.ruanyifeng.com/blog/atom.xml','https://sspai.com/feed']},
+  {id:'ch_med', name:'医药健康', color:'#2fbf71', on:true, focus:'只保留有明确临床或政策影响的内容', feeds:['https://example.org/med/rss']},
+  {id:'ch_fb',  name:'足球',     color:'#f5a623', on:true, focus:'', feeds:['https://example.org/fb/rss']},
+  {id:'ch_pol', name:'政治新闻', color:'#e5484d', on:false, focus:'', feeds:[]},
+];
+const DEMO_ITEMS = [
+  {title:'用 Agent 重写遗留系统：一个 40 人团队的半年复盘', summary:'把单体拆成 Agent 可接管模块的实操路径，含失败回滚方案。', text:'详文', url:'https://example.com/a', src:'infoq.cn', score:9, lv:'hi', ch:'ch_def', category:'Agent 工程', why:'和你正在做的工程化方向直接相关，踩坑部分可照抄。'},
+  {title:'把 RSS 变成 LLM 的素材管道：我的零成本方案', summary:'用 RSSHub + 本地规则粗筛，把送进模型的 token 砍掉七成。', text:'详文', url:'https://example.com/b', src:'ruanyifeng.com', score:8, lv:'hi', ch:'ch_def', category:'工作流', why:'正是这套工作台的省钱关键，可直接落地。'},
+  {title:'多模态模型在病理切片判读上的敏感性分析', summary:'回顾性队列显示假阴性率下降 2.1 个百分点。', text:'详文', url:'https://example.com/c', src:' Lancet Digital Health', score:9, lv:'hi', ch:'ch_med', category:'医学 AI', why:'和你关注的 AI 落地交叉，样本量够大。'},
+  {title:'儿童支原体肺炎门诊量回落，儿科诊区仍建议错峰', summary:'三甲医院公布最新接诊提示。', text:'详文', url:'https://example.com/d', src:'健康报', score:6, lv:'mid', ch:'ch_med', category:'就医', why:''},
+  {title:'国家集采新一轮报价规则征求意见', summary:'新增熔断机制，仿制药报价区间收窄。', text:'详文', url:'https://example.com/e', src:'医保局', score:7, lv:'mid', ch:'ch_med', category:'政策', why:'影响药企与渠道，值得跟进原文。'},
+  {title:'英超第 12 轮：中下游球队对强队的逼抢时长创新高', summary:'高位逼抢平均 34 分钟，比上赛季多 6 分钟。', text:'详文', url:'https://example.com/f', src:'The Athletic', score:8, lv:'hi', ch:'ch_fb', category:'战术', why:'战术趋势数据，可直接用于观赛判断。'},
+  {title:'世界杯预选赛抽签结果出炉', summary:'同组回避原则生效，死亡之组提前锁定。', text:'详文', url:'https://example.com/g', src:'直播吧', score:5, lv:'mid', ch:'ch_fb', category:'赛程', why:''},
+  {title:'某球队主力门将伤停六周', summary:'训练中跖骨骨折，替补门将临危受命。', text:'详文', url:'https://example.com/h', src:'懂球帝', score:3, lv:'low', ch:'ch_fb', category:'伤停', why:''},
+  {title:'一份被忽略的团队周报模板', summary:'三行结构把进度、阻塞、决策拆开写。', text:'详文', url:'https://example.com/i', src:'个人博客', score:2, lv:'low', ch:'ch_def', category:'效率', why:''},
+];
+function loadDemo(){
+  S.cfg.ch = JSON.parse(JSON.stringify(DEMO_CH));
+  S.items = DEMO_ITEMS.map((x,i) => Object.assign({}, x, {id:'demo'+i+Date.now(), ts:Date.now()-i*60000}));
+  S.seen = {};
+  S.items.forEach(x => S.seen[x.id] = 1);
+save(); view='__all'; render();
+  log('演示数据已载入：4 个分区（政治新闻默认停用）。总看板按分区分栏，鼠标停在标题上展开摘要');
+}
+$('#bDemo').onclick = loadDemo;
+
+/* ══════════ 拉取主流程（按分区分别打分） ══════════ */
 let busy = false;
 $('#bPull').onclick = async () => {
   if(busy) return;
   const cfg = {...S.cfg};
-  if(!cfg.feeds.length){
-    sheet('还没填 RSS 源', '到「设置」里一行一个贴上 RSS 地址，# 开头的行会被当作注释忽略。', ()=>{ $('#cfg').classList.add('show'); fillCfg(); }, '去设置');
-    return;
-  }
-  if(!cfg.key){
-    sheet('还没填 API Key', '不填 Key 只能看演示数据。到「设置」里贴一个 MiMo 或任意 OpenAI 兼容接口的 Key，它只存在你自己的浏览器里。', ()=>{ $('#cfg').classList.add('show'); fillCfg(); $('#cKey').focus(); }, '去填 Key');
-    return;
-  }
-  const bp = $('#bPull');
-  busy = true; bp.disabled = true; bp.classList.add('loading'); bp.textContent = '拉取中…';
-  $('#logWrap').classList.remove('closed'); $('#logBadge').classList.remove('show');
-  showSk();
-  try{
-    let fresh = [];
-    for(const f of cfg.feeds){
-      try{
-        const xml = await getXML(f, cfg);
-        const arr0 = parse(xml, host(f));
-        const arr = arr0.filter(x => !S.seen[x.id]);
-        log(`${host(f)}：解析 ${arr0.length} 条，新增 ${arr.length} 条`);
-        fresh = fresh.concat(arr);
-      }catch(e){ log(`✗ ${host(f)}：抓取失败 ${String(e.message).slice(0,140)}`); }
-    }
-    if(!fresh.length){ toast('没有新内容，都读过了'); return; }
+  const chs = cfg.ch.filter(c => c.on && (c.feeds||[]).length);
+  if(!chs.length) return sheet('还没有可用的分区', '到「设置」里给至少一个分区填上 RSS 源并把分区保持启用，再回来拉取。', ()=>{ $('#cfg').classList.add('show'); fillCfg(); }, '去填');
+  if(!cfg.key) return sheet('还没填 API Key', '不填 Key 只能看演示数据。到「设置」里贴一个 MiMo 或 DeepSeek 的 Key，存在你自己浏览器里。', ()=>{ $('#cfg').classList.add('show'); fillCfg(); }, '去填');
 
-    const out = [];
-    for(let i=0; i<fresh.length; i+=10){
-      const batch = fresh.slice(i,i+10), no = i/10+1;
-      try{
-        const res = await judge(batch, cfg);
-        const used = new Set();
-        res.forEach(o=>{
-          const idx = Number(o && o.i);
-          const it = batch[idx];
-          if(!it || used.has(idx)) return;
-          used.add(idx);
-          let sc = Number(o.score);
-          if(!Number.isFinite(sc)) sc = 5;
-          it.score = Math.max(0, Math.min(10, Math.round(sc)));
-          it.summary = String(o.summary||'').replace(/\s+/g,' ').slice(0,30);
-          it.why = String(o.why||'').replace(/\s+/g,' ').slice(0,80);
-          it.category = String(o.category||'').replace(/\s+/g,' ').slice(0,20) || '未分类';
-          out.push(it);
-        });
-        batch.forEach((it,idx)=>{
-          if(used.has(idx)) return;
-          Object.assign(it,{score:5, summary:String(it.text||'').slice(0,30), why:'模型漏判本条，按中间分入库', category:'未分类'});
-          out.push(it);
-        });
-        log(`AI 第 ${no} 批：${batch.length} 条完成`);
-      }catch(e){
-        log(`✗ AI 第 ${no} 批失败，整批 ${batch.length} 条按 5 分入库：${String(e.message).slice(0,140)}`);
-        markFallback(batch, 'AI 判定失败，未打分');
-        out.push(...batch);
+  busy = true; $('#bPull').disabled = true; $('#log').classList.add('show');
+  let added = 0;
+  try{
+    for(const c of chs){
+      const focus = [cfg.focus, c.focus].filter(Boolean).join('\n该分区专属：');
+      let fresh = [];
+      for(const f of c.feeds){
+        try{
+          const xml = await getXML(f, cfg.proxy);
+          const arr = parse(xml, host(f)).filter(x => !S.seen[x.id]);
+          log(`[${c.name}] ${host(f)}：${arr.length} 条新`);
+          fresh = fresh.concat(arr);
+        }catch(e){ log(`✗ [${c.name}] ${host(f)}：${e.message}`); }
       }
+      if(!fresh.length){ log(`[${c.name}] 没有新内容`); continue; }
+
+      let kept = fresh;
+      try{
+        const out = [];
+        for(let i=0;i<kept.length;i+=10){
+          const r = await judge(kept.slice(i,i+10), focus, cfg);
+          r.forEach(o => {
+            const it = kept[o.i]; if(!it) return;
+            it.score = Math.max(0, Math.min(10, Number(o.score)||0));
+            it.summary = String(o.summary||'').slice(0,120);
+            it.why = String(o.why||'').slice(0,160);
+            it.category = String(o.category||'').slice(0,20);
+            out.push(it);
+          });
+        }
+        kept = out;
+        log(`[${c.name}] AI 打分完成：${out.length} 条`);
+      }catch(e){
+        log(`[${c.name}] AI 打分失败，全部按 5 分入库：`+e.message);
+        kept.forEach(x => { x.score=5; x.summary=x.text.slice(0,80); x.why='AI 不可用，未判定'; });
+      }
+      kept.forEach(x => { x.lv = lvOf(x.score); x.ch = c.id; S.seen[x.id] = 1; });
+      S.items = kept.concat(S.items).slice(0, 600);
+      added += kept.length;
+      save(); render();
     }
-    const kept = out;
-    kept.forEach(x => { x.lv = lvOf(x.score); S.seen[x.id] = 1; });
-    S.items = kept.concat(S.items).slice(0,400);
-    save(); render();
-    const n = kept.filter(x=>x.lv==='hi').length;
-    toast(`完成：新增 ${kept.length} 条，其中必读 ${n} 条`);
-  }catch(e){
-    toast('本轮拉取异常：'+String(e.message||e));
-  }finally{
-    busy = false; bp.disabled = false; bp.classList.remove('loading'); bp.textContent = '拉取更新';
-  }
+    view = '__all';                       // 拉完统一回总看板，一眼看全部分区
+    render();
+    toast(added ? `完成：新增 ${added} 条，已回到总看板` : '所有分区都没有新内容');
+  }finally{ busy=false; $('#bPull').disabled=false; }
 };
 
-/* ══════════ 渲染与交互 ══════════ */
+/* ══════════ 视图标签栏 ══════════ */
+function tabbar(){
+  const chs = S.cfg.ch;
+  const tot = S.items.length;
+  const hiN = S.items.filter(x=>x.lv==='hi').length;
+  const html = [
+    {id:'__all', name:'信息台总看板', color:'var(--acc)', n:tot, extra:hiN?hiN+' 必读':''}
+  ].concat(chs.map(c => ({
+    id:c.id, name:c.name, color:c.color,
+    n:S.items.filter(x=>x.ch===c.id).length,
+    extra:c.on?'':'已停用'
+  }))).map(t => `
+    <button class="tab ${view===t.id?'on':''} ${t.id==='__all'?'all':''} ${t.extra==='已停用'?'off':''}" data-view="${esc(t.id)}">
+      ${t.id==='__all'?'':'<span class="td" style="background:'+esc(t.color)+'"></span>'}
+      ${esc(t.name)}
+      <span class="tn">${t.extra ? esc(t.extra) : t.n}</span>
+    </button>`).join('')
+  $('#tabs').innerHTML = html;
+  $$('#tabs .tab').forEach(b => b.onclick = () => {
+    if(b.dataset.view === '__cfg'){ return; }
+    setView(b.dataset.view);
+  });
+}
+
+/* 总看板「今日摘要」：每个分区头牌 + 次条 */
+function digest(){
+  if(!S.items.length) return '';
+  const pick = [];
+  const seenName = {};
+  S.cfg.ch.forEach(c => {
+    if(seenName[c.name]) return; seenName[c.name]=1;
+    const mine = S.items.filter(x=>x.ch===c.id).sort((a,b)=>(b.score||0)-(a.score||0));
+    if(mine.length) pick.push({c, list: mine.slice(0,2)});
+  });
+  if(!pick.length) return '';
+  pick.sort((a,b)=>(b.list[0].score||0)-(a.list[0].score||0));
+  const shown = pick.reduce((n,p)=>n+p.list.length,0);
+  return '<section class="dig"><h3>'
+    + '<span class="dot" style="width:7px;height:7px;border-radius:50%;background:var(--acc);display:inline-block"></span>'
+    + '今日摘要 · 各分区头牌<span class="n">'+pick.length+' 个分区 / 共 '+shown
+    + ' 条，点标题跳原文，点「进入分区」切过去</span></h3>'
+    + pick.map(p => '<div class="digrow">'
+        + '<div class="bd">'
+        + p.list.map(it => '<div class="dline">'
+            + '<span class="dcdot" style="background:'+esc(p.c.color)+'"></span>'
+            + (it.url ? '<a href="'+esc(it.url)+'" target="_blank" rel="noopener">'+esc(it.title)+'</a>' : '<span>'+esc(it.title)+'</span>')
+            + (it.summary ? '<p>'+esc(it.summary)+'</p>' : '')
+            + '</div>').join('')
+        + '<div class="mt"><span>'+esc(p.c.name)+'</span><span>'+esc((p.c.feeds||[]).length)+' 个源</span>'
+        + '<button class="go" data-goto="'+esc(p.c.id)+'">进入分区 →</button></div>'
+        + '</div></div>').join('')
+    + '</section>';
+}
+
+/* ══════════ 渲染 ══════════ */
 function card(it){
   const cls = it.lv==='hi' ? 's-hi' : (it.lv==='mid' ? 's-mid' : 's-low');
-  return `<article class="item" draggable="true" data-lv="${it.lv}" data-id="${esc(it.id)}">
-    <button class="del" title="删掉">×</button>
-    <h4>${it.url?`<a href="${esc(it.url)}" target="_blank" rel="noopener">${esc(it.title)}</a>`:esc(it.title)}</h4>
-    <p>${esc(it.summary || String(it.text||'').slice(0,90) || '（无摘要）')}</p>
-    <div class="meta">
-      <span class="sc ${cls}" title="点击改判">${Number(it.score)||0} 分</span>
-      <span class="src" title="${esc(it.src)}">${esc(it.src)}</span>
-      ${it.category?`<span class="src">${esc(it.category)}</span>`:''}
-    </div>
-    ${it.why ? `<div class="why">${esc(it.why)}</div>`:''}
+  const body = (it.summary || it.text || '')
+    + (it.why && !it.why.startsWith('AI 不可用') ? '@@'+it.why : '');
+  const [sum, why] = body.split('@@');
+  return `<article class="item" draggable="true" data-id="${esc(it.id)}" tabindex="0">
+    <button class="del" title="删掉这条">×</button>
+    <h4><span class="sc ${cls}" data-act="cycle" data-tip="${it.score} 分 · 点一下改档" aria-label="${it.score} 分"></span>
+      <span class="tt">${it.url?`<a href="${esc(it.url)}" target="_blank" rel="noopener">${esc(it.title)}</a>`:esc(it.title)}</span></h4>
+    <div class="det"><div>
+      ${sum ? `<p class="sum">${esc(sum)}</p>` : ''}
+      ${why ? `<div class="why">${esc(why)}</div>` : ''}
+      <div class="meta"><span class="src">${esc(it.src||'未知源')}</span>
+        ${it.category?`<span class="src">${esc(it.category)}</span>`:''}</div>
+    </div></div>
   </article>`;
 }
-function render(){
-  const inLv = k => S.items.filter(x=>x.lv===k);
-  const html = k => { const a=inLv(k); return a.length ? a.map(card).join('') : '<div class="empty">这一栏还空着</div>'; };
-  $('[data-lv=hi] .list').innerHTML  = html('hi');
-  $('[data-lv=mid] .list').innerHTML = html('mid');
-  $('[data-lv=low] .list').innerHTML = html('low');
-  $('#n1').textContent = inLv('hi').length;
-  $('#n2').textContent = inLv('mid').length;
-  $('#n3').textContent = inLv('low').length;
-  $('#n4').textContent = S.items.length;
-  $('#c1n').textContent = inLv('hi').length;
-  $('#c2n').textContent = inLv('mid').length;
-  $('#c3n').textContent = inLv('low').length;
-  bind(); applyFilter();
+const emptyBox = t => `<div class="zempty">${esc(t)}</div>`;
+/* 一段（必读/该看/扫一眼）：flat=只列标题 */
+function subCol(c, lv, a, chId, flat){
+  const mov = chId ? ` data-mvch="${esc(chId)}"` : '';
+  return `<div class="zsec ${flat?'flat':''} ${lv.cls}-col" data-lv="${lv.k}"${mov}>
+    <div class="sh"><span class="tag" style="background:${lv.color}"></span>${lv.name}<span class="n">${a.length}</span></div>
+    <div class="list">${a.length ? a.map(card).join('') : emptyBox('这一档现在是空的')}</div></div>`;
 }
-let dragId = '';
-function regrade(id, lv){
-  const it = S.items.find(x=>x.id===id); if(!it) return;
-  const order = ['hi','mid','low'];
-  it.lv = lv || order[(order.indexOf(it.lv)+1)%3];
-  it.score = it.lv==='hi' ? 9 : (it.lv==='mid' ? 6 : 3);
-  save(); render();
-}
-function bind(){
-  $$('.item').forEach(el=>{
-    el.querySelector('.del').onclick = () => {
-      const id = el.dataset.id;
-      S.items = S.items.filter(x=>x.id!==id); save(); render();
-    };
-    el.querySelector('.sc').onclick = () => regrade(el.dataset.id);
-    el.ondragstart = e => {
-      dragId = el.dataset.id; el.classList.add('drag');
-      e.dataTransfer.effectAllowed = 'move';
-      try{ e.dataTransfer.setData('text/plain', dragId); }catch(_){}
-    };
-    el.ondragend = () => {
-      dragId = ''; el.classList.remove('drag');
-      $$('.col').forEach(c=>c.classList.remove('over'));
-    };
-  });
-}
-$$('.col').forEach(col=>{
-  col.ondragover = e => { e.preventDefault(); e.dataTransfer.dropEffect='move'; col.classList.add('over'); };
-  col.ondragleave = e => { if(!col.contains(e.relatedTarget)) col.classList.remove('over'); };
-  col.ondrop = e => {
-    e.preventDefault(); col.classList.remove('over');
-    const id = dragId || (e.dataTransfer && e.dataTransfer.getData('text/plain'));
-    if(id) regrade(id, col.dataset.lv);
-  };
-});
+/* 分区栏常显，无需折叠绑定 */
 
-/* ══════════ 演示数据 ══════════ */
-const DEMO = [
-  {title:'用 Agent 重写遗留系统：一个 40 人团队的半年复盘',src:'infoq.cn',score:9,summary:'把单体拆成 Agent 可接管模块的实操路径，含失败回滚方案。',why:'和你正在做的工程化方向直接相关，踩坑部分可照抄。',category:'Agent 工程'},
-  {title:'大模型推理成本两年降了 280 倍，但账不是这么算的',src:'stratechery.com',score:7,summary:'单价暴跌被调用量暴涨吃掉，真实账单只降了 3 成。',why:'帮你判断现在自建还是继续用 API。',category:'成本'},
-  {title:'某 AI 编程工具宣布日活破百万',src:'36kr.com',score:3,summary:'官方口径的增长数据，无产品细节。',why:'纯 PR 稿，看标题即可。',category:'快讯'},
-  {title:'把 RSS 变成 LLM 的素材管道：我的零成本方案',src:'ruanyifeng.com',score:8,summary:'用 RSSHub + 本地规则粗筛，把送进模型的 token 砍掉七成。',why:'正是这套工作台的省钱关键，可直接落地。',category:'工作流'},
-  {title:'独立开发者出海：Stripe 收款被风控后的 72 小时',src:'v2ex.com',score:6,summary:'被冻结后的申诉材料清单和话术。',why:'暂时用不上，先存着备用。',category:'出海'}
-];
-$('#bDemo').onclick = () => {
-  DEMO.forEach((d,i)=>{
-    d.id = 'demo'+i; d.url = 'https://example.com/'+i;
-    d.text = d.summary; d.lv = lvOf(d.score);
-    S.seen[d.id] = 1;
+function scope(){
+  if(isAll()) return {hi:S.items.slice(), mid:S.items.slice(), low:S.items.slice(), all:S.items.slice(), label:'全部分区', label4:'去重后 · 全部分区', n4t:'累计入库'};
+  const mine = S.items.filter(x=>x.ch===view);
+  return {hi:mine, mid:mine, low:mine, all:mine,
+    label: (chOf(view).name||'分区'), label4:'去重后 · 本分区', n4t:'本分区入库'};
+}
+function updateStats(){
+  const sc = scope();
+  const by = (arr,k) => isAll() ? arr.filter(x=>x.lv===k) : arr.filter(x=>x.lv===k);
+  const set=(id,v)=>{const e=document.getElementById(id); if(e) e.textContent=v;};
+  set('n1', by(sc.hi,'hi').length);
+  set('n2', by(sc.mid,'mid').length);
+  set('n3', by(sc.low,'low').length);
+  set('n4', sc.all.length);
+  set('n4t', sc.n4t);
+  ['scope1','scope2','scope3'].forEach(id=>{const e=document.getElementById(id); if(e) e.textContent=sc.label;});
+  const e4=document.getElementById('scope4'); if(e4) e4.textContent=sc.label4;
+  const tip=document.getElementById('chTip');
+  if(tip) tip.textContent = isAll() ? ('总看板 · '+S.cfg.ch.length+' 个分区') : (chOf(view).name||'分区');
+}
+
+function render(){
+  const chs = S.cfg.ch;
+  tabbar();
+  $('#chTip').textContent = isAll() ? ('总看板 · '+chs.length+' 个分区') : (chOf(view).name||'分区');
+  if(!chs.some(c=>c.id===view) && !isAll()) view = '__all';
+
+  if(!S.items.length){
+    $('#dig').innerHTML = '';
+    $('#board').innerHTML = '<div class="zempty all">'
+      + '<span style="font-size:26px;display:block;margin-bottom:10px;opacity:.4">◔</span>'
+      + '还没有内容。<br>点右上「载入演示」看效果，或进「设置」填 RSS 源 + API Key 后点「拉取更新」。</div>';
+    updateStats(); return;
+  }
+
+  /* ── 单个分区页：三栏并排（必读 / 该看 / 扫一眼） ── */
+  if(!isAll()){
+    const cur = chOf(view);
+    const mine = S.items.filter(x=>x.ch===view);
+    $('#dig').innerHTML = '';
+    $('#board').innerHTML =
+      '<div class="phead"><span class="nm"><i style="background:'+esc(cur.color||'#5b8cff')+'"></i>'
+      + esc(cur.name||'分区') + '</span>'
+      + '<span class="cnt">共 '+mine.length+' 条</span>'
+      + '<span class="cnt">'+(cur.feeds||[]).length+' 个源</span>'
+      + (cur.on?'':'<span class="cnt">已停用</span>')
+      + '<span class="sp"></span>'
+      + '<button class="go" data-goto="__all">← 回总看板</button></div>'
+      + '<div class="subgrid">' + LV.map(lv => {
+          const a = mine.filter(x => x.lv===lv.k);
+          return `<section class="sub" style="--c:${lv.color}" data-lv="${lv.k}"><div class="sh">
+            <span class="tag"></span>${lv.name}<span class="n">${a.length}</span></div>
+            <div class="list">${a.length ? a.map(card).join('') : '<div class="zempty">这一档现在是空的</div>'}</div></section>`;
+        }).join('') + '</div>';
+    bind(); updateStats(); return;
+  }
+
+  /* ── 总看板：今日摘要 + 一分区一栏（栏内也只有标题） ── */
+  $('#dig').innerHTML = digest();
+  const groups = S.cfg.ch.map(c => ({c, a: S.items.filter(x=>x.ch===c.id)}));
+  const other = S.items.filter(x => !S.cfg.ch.some(c=>c.id===x.ch));
+  $('#board').innerHTML = groups.map(g => {
+      const n = {}; g.a.forEach(x=>n[x.lv]=(n[x.lv]||0)+1);
+      const sorted = g.a.slice().sort((x,y)=>(y.score||0)-(x.score||0));
+      return `<section class="zcol ${g.c.on?'':'off'}" style="--c:${esc(g.c.color||'#5b8cff')}">
+        <div class="zchd"><span class="cdot"></span><span class="cn">${esc(g.c.name||'分区')}</span>
+          <span class="cnt">${g.c.on ? g.a.length+' 条' : '已停用'}</span>
+          <button class="go" data-goto="${esc(g.c.id)}">进入 →</button></div>
+        <div class="zbody">${
+          g.a.length
+            ? LV.map(lv => subCol(g.c, lv, sorted.filter(x=>x.lv===lv.k), g.c.id, true)).join('')
+            : '<div class="zempty">这个分区还没有内容</div>'
+        }</div></section>`;
+    }).join('')
+    + (other.length ? `<section class="zcol" style="--c:#8a8f98">
+        <div class="zchd"><span class="cdot"></span><span class="cn">未分组</span>
+          <span class="cnt">${other.length} 条</span></div>
+        <div class="zbody">${LV.map(lv => subCol({id:''}, lv, other.filter(x=>x.lv===lv.k), '', true)).join('')}</div></section>` : '');
+  bind(); updateStats();
+}
+
+/* ── 卡片交互：删除 / 点分数改档 / 拖拽换栏换分区 ── */
+function bind(){
+  $$('.item').forEach(el => {
+    const id = el.dataset.id;
+    const del = el.querySelector('.del');
+    if(del) del.onclick = () => { S.items = S.items.filter(x=>x.id!==id); save(); render(); };
+    const dropCh = el.closest('[data-mvch]');
+    if(dropCh) el.dataset.mvch = dropCh.dataset.mvch;
+    const sc = el.querySelector('[data-act=cycle]');
+    if(sc) sc.onclick = () => {
+      const it = S.items.find(x=>x.id===id); if(!it) return;
+      const i = LV.findIndex(l=>l.k===it.lv);
+      const nx = LV[(i+1) % LV.length];
+      it.lv = nx.k; it.score = nx.min;
+      save(); render();
+    };
+    el.ondragstart = () => { el.classList.add('drag'); el.dataset.from = el.closest('[data-lv]').dataset.lv; };
+    el.ondragend   = () => {
+      el.classList.remove('drag'); $$('[data-lv]').forEach(c=>c.classList.remove('over'));
+      const t = el.dataset.toLv, tc = el.dataset.toCh;
+      if((t && t!==el.dataset.from) || (tc && tc!==el.dataset.mvch)){
+        const it = S.items.find(x=>x.id===id);
+        if(it){ if(t){ it.lv=t; it.score=LV.find(l=>l.k===t).min; } if(tc) it.ch=tc; save(); render(); return; }
+      }
+      delete el.dataset.toLv; delete el.dataset.toCh;
+    };
   });
-  S.items = DEMO.map(d=>({...d})).concat(S.items.filter(x=>!String(x.id).startsWith('demo')));
-  save(); render(); toast('演示数据已载入：拖卡片或点分数徽章可改判');
-};
+  $$('#board [data-lv]').forEach(c => {
+    c.ondragover = e => { e.preventDefault(); c.classList.add('over'); };
+    c.ondragleave = () => c.classList.remove('over');
+    c.ondrop = e => {
+      e.preventDefault(); c.classList.remove('over');
+      const el = document.querySelector('.item.drag'); if(!el) return;
+      el.dataset.toLv = c.dataset.lv;
+      if(c.dataset.mvch !== undefined) el.dataset.toCh = c.dataset.mvch;
+    };
+  });
+  /* 分区跳转：摘要「进入分区」/ 栏头「进入」/ 分区页「回总看板」 */
+  $$('[data-goto]').forEach(b => b.onclick = (e) => {
+    e.stopPropagation();
+    const t = b.dataset.goto;
+    setView(t);
+    if(t === '__all' || b.classList.contains('go')) window.scrollTo({top:0,behavior:'smooth'});
+  });
+}
 
 /* ══════════ 启动 ══════════ */
 fillCfg();
-if(!S.items.length){ $('#bDemo').click(); }
-else render();
+if(!S.items.length && !localStorage.getItem(K+'_init')){
+  loadDemo();
+  const _w = document.getElementById('logWrap'); if(_w) _w.classList.add('closed');
+  try{ localStorage.setItem(K+'_init','1'); }catch(e){}
+}else render();
+
 </script>
 </body>
 </html>
