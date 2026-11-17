@@ -395,8 +395,9 @@ textarea{resize:vertical;min-height:74px;line-height:1.55}
   </div>
   <div class="fld">
     <label>CORS 代理（直连失败时兜底，一行一个，自动依次尝试）</label>
-    <textarea id="cProxy" style="min-height:74px" placeholder="https://proxy.corsfix.com/?url={url}">https://proxy.corsfix.com/?url={url}</textarea>
-    <div class="hint">corsproxy.io 现已要求 API Key（免费仅 localhost），线上会 401；默认用 corsfix，免费免 Key。支持 {url} 占位符；一行一个会按顺序回退。</div>
+    <textarea id="cProxy" style="min-height:74px" placeholder="https://api.allorigins.win/raw?url={url}">https://api.allorigins.win/raw?url={url}
+https://r.jina.ai/{url}</textarea>
+    <div class="hint">第一行 allorigins 是实测线上可用的免费代理；r.jina.ai 作为备选（返回 Markdown，可能解析不出标题）。corsproxy.io 需 API Key、corsfix 限制域名，线上都会失败。支持 {url} 占位符；一行一个按顺序回退。</div>
   </div>
   <div class="fld full">
     <div class="row2">
@@ -463,16 +464,18 @@ const uid = () => 'c' + Math.random().toString(36).slice(2,8);
 const CFG_DEF = () => ({
   focus: '', key: '', base: 'https://api.xiaomimimo.com/v1',
   model: 'mimo-v2.6-flash',
-  proxy: 'https://proxy.corsfix.com/?url={url}',
+  proxy: 'https://api.allorigins.win/raw?url={url}\nhttps://r.jina.ai/{url}',
   ch: [{id:'ch_def', name:'默认分区', color:'#5b8cff', focus:'', feeds:[], on:true}]
 });
 const LOGS = [];
 const isAll = () => view === '__all';
 function normProxy(p){
   let a = Array.isArray(p) ? p : (typeof p==='string' ? p.split('\n').map(s=>s.trim()).filter(Boolean) : []);
-  // 旧默认 corsproxy.io 已要求 API Key，线上必 401：自动换成免费可用的 corsfix
-  a = a.map(x => /corsproxy\.io/i.test(x) && !/key=/i.test(x) ? 'https://proxy.corsfix.com/?url={url}' : x);
-  return a.length ? [...new Set(a)] : ['https://proxy.corsfix.com/?url={url}'];
+  const GOOD = ['https://api.allorigins.win/raw?url={url}', 'https://r.jina.ai/{url}'];
+  // 实测失效的公共代理：corsproxy.io 401、corsfix 403（域名限制），自动剔除并换可用代理
+  a = a.filter(x => !/corsproxy\.io|corsfix\.com/i.test(x) || /key=/i.test(x));
+  a = a.concat(GOOD);
+  return [...new Set(a)];
 }
 /* 只读存储，返回初始状态；绝不在这里碰 S（S 还没声明完） */
 function load(){
@@ -712,7 +715,8 @@ async function getXML(url, proxies){
         finally{ clearTimeout(tm2); }
         if(!r.ok) throw new Error(String(r.status) + (r.status===401 ? '（代理要求 API Key，请换免费代理或申请 Key）' : ''));
         const txt = await r.text();
-        if(/<parsererror|corsproxy_error|invalid_origin/i.test(txt.slice(0,300))) throw new Error('代理返回错误页');
+        if(/<parsererror|corsproxy_error|invalid_origin|error_code/i.test(txt.slice(0,400))) throw new Error('代理返回错误页');
+        if(!/<rss|<feed|<rdf/i.test(txt.slice(0,1500))) throw new Error('代理未返回 XML');
         return txt;
       }catch(err){ errs.push(new URL(p).hostname + ':' + err.message); }
     }
